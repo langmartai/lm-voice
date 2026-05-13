@@ -1,0 +1,61 @@
+:root {
+  color-scheme: dark light;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+}
+
+body {
+  margin: 0;
+  padding: 12px 14px;
+  background: #1a1a1d;
+  color: #eaeaea;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #555;
+  flex-shrink: 0;
+}
+
+.dot.idle      { background: #555; }
+.dot.listening { background: #3aa3ff; box-shadow: 0 0 8px #3aa3ff; }
+.dot.thinking  { background: #ffb547; box-shadow: 0 0 8px #ffb547; }
+.dot.speaking  { background: #2ecc71; box-shadow: 0 0 8px #2ecc71; }
+.dot.error     { background: #e74c3c; box-shadow: 0 0 8px #e74c3c; }
+
+#session-row { font-size: 11px; opacity: 0.7; }
+.label { font-size: 10px; opacity: 0.55; text-transform: uppercase; letter-spacing: 0.05em; }
+
+#transcript-row, #reply-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  background: #232328;
+  border-radius: 6px;
+  min-height: 32px;
+}
+
+#transcript, #reply {
+  font-size: 13px;
+  line-height: 1.4;
+  word-break: break-word;
+}

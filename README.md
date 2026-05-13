@@ -33,6 +33,10 @@ Both products are first-party Anthropic surfaces but they use **different endpoi
 - [**claude-ai-voice.md**](./claude-ai-voice.md) — what we have on the Claude.ai web voice mode endpoint.
 - [**methodology.md**](./methodology.md) — how this was captured (transparent TLS MITM via [lm-proxy](https://github.com/yi/lm-proxy)) and what we still don't have.
 
+## Reference implementation
+
+- [**app/**](./app) — Electron tray app for Windows. Hold a hotkey, speak a question about a specific Claude Code session, get a short spoken reply. Reuses the STT endpoint documented above; pipes through an lm-assist Haiku agent; speaks back via [Supertonic](https://github.com/supertone-inc/supertonic) on-device TTS. See [`app/README.md`](./app/README.md).
+
 ## Status & caveats
 
 - This is **reverse-engineered from network captures of a user's own traffic** plus reading the JS that ships inside the Claude Code CLI binary. It is not from Anthropic documentation.

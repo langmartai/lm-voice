@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' blob: data:" />
+  <title>LM Voice</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="root">
+    <div id="status-row">
+      <span id="dot" class="dot idle"></span>
+      <span id="status">Idle</span>
+    </div>
+    <div id="session-row">
+      <span class="label">Session:</span>
+      <span id="session-name">none</span>
+    </div>
+    <div id="transcript-row">
+      <div class="label">You said</div>
+      <div id="transcript">—</div>
+    </div>
+    <div id="reply-row">
+      <div class="label">Reply</div>
+      <div id="reply">—</div>
+    </div>
+  </div>
+  <script src="index.js"></script>
+</body>
+</html>

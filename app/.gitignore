@@ -1,0 +1,17 @@
+node_modules/
+dist/
+out/
+*.log
+.env
+.env.local
+
+# Downloaded ONNX models and voice styles (fetched on first run)
+assets/onnx/
+assets/voice_styles/
+
+# Runtime config (per-user)
+config.local.yaml
+
+# OS
+.DS_Store
+Thumbs.db

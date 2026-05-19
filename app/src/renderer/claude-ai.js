@@ -37,13 +37,14 @@ const turn = {
   assistantText: '',
   speakingBubble: null,
   speakingWordIdx: 0,
+  // Where the highlight currently sits inside speakingBubble's word spans.
+  // tts_word events advance this by searching forward for a fuzzy text match
+  // (handles cases like TTS splitting "twenty-six" → two spoken words while
+  // the bubble has it as one span).
+  highlightSpanIdx: -1,
   ttsTimeOffset: null,
   pendingWordTimers: [],
-  // Queue of tts_word events still waiting to be highlighted. When playback
-  // is paused, we cancel the in-flight setTimeouts; on resume we re-schedule
-  // the unfired ones with the offset shifted by the pause duration. On
-  // cancel, we clear the queue entirely.
-  ttsQueue: [],                // [{ idx, text, ptsMs }, ...] pending
+  ttsQueue: [],
   ttsPaused: false,
   ttsPausedAt: 0,
 };
@@ -295,36 +296,62 @@ function scheduleWordHighlight(text, ptsMs) {
     if (turn.assistant) finalizeAssistant();
     turn.speakingBubble = findAssistantBubbleForPlayback();
     turn.speakingWordIdx = 0;
+    turn.highlightSpanIdx = -1;
   }
   if (!turn.speakingBubble) return;
   const pts = Math.max(0, ptsMs ?? 0);
   if (turn.ttsTimeOffset == null) {
     turn.ttsTimeOffset = performance.now() - pts;
   }
-  const idx = turn.speakingWordIdx++;
-  turn.ttsQueue.push({ idx, text, ptsMs: pts });
-  if (!turn.ttsPaused) scheduleQueuedHighlight(idx, text, pts);
+  const seq = turn.speakingWordIdx++;
+  turn.ttsQueue.push({ seq, text, ptsMs: pts });
+  if (!turn.ttsPaused) scheduleQueuedHighlight(seq, text, pts);
 }
 
-function scheduleQueuedHighlight(idx, text, pts) {
+function scheduleQueuedHighlight(seq, text, pts) {
   const bubble = turn.speakingBubble;
   if (!bubble) return;
   const targetTime = turn.ttsTimeOffset + pts;
   const delay = Math.max(0, targetTime - performance.now());
   const id = setTimeout(() => {
-    // Pop this word from the pending queue so pause/cancel skip it.
-    const qi = turn.ttsQueue.findIndex((w) => w.idx === idx);
+    const qi = turn.ttsQueue.findIndex((w) => w.seq === seq);
     if (qi >= 0) turn.ttsQueue.splice(qi, 1);
     if (!bubble.isConnected) return;
-    const spans = bubble.querySelectorAll('.word');
-    spans.forEach((s) => s.classList.remove('speaking'));
-    const span = spans[idx];
-    if (span) {
-      span.classList.add('speaking');
-      span.scrollIntoView({ block: 'nearest' });
-    }
+    advanceHighlight(bubble, text);
   }, delay);
   turn.pendingWordTimers.push(id);
+}
+
+// Move the .speaking class forward to the span that matches `ttsText`. Search
+// from the current highlight position + 1 within a small look-ahead window;
+// if no match, just step forward by one. This tolerates the common case
+// where TTS pronounces a hyphenated/compound word as two spoken words but
+// the bubble has it as one span ("twenty-six" → "twenty", "six").
+const FUZZY_LOOKAHEAD = 5;
+function advanceHighlight(bubble, ttsText) {
+  const spans = bubble.querySelectorAll('.word');
+  if (!spans.length) return;
+  const startFrom = (turn.highlightSpanIdx ?? -1) + 1;
+  if (startFrom >= spans.length) return;       // ran out of spans
+  let target = -1;
+  const end = Math.min(spans.length, startFrom + FUZZY_LOOKAHEAD);
+  for (let i = startFrom; i < end; i++) {
+    if (wordsLooseEqual(spans[i].textContent, ttsText)) { target = i; break; }
+  }
+  if (target < 0) target = startFrom;          // best-effort: advance by 1
+  spans.forEach((s) => s.classList.remove('speaking'));
+  spans[target].classList.add('speaking');
+  spans[target].scrollIntoView({ block: 'nearest' });
+  turn.highlightSpanIdx = target;
+}
+
+function wordsLooseEqual(spanText, ttsText) {
+  const a = String(spanText || '').replace(/[^a-z0-9']/gi, '').toLowerCase();
+  const b = String(ttsText || '').replace(/[^a-z0-9']/gi, '').toLowerCase();
+  if (!a || !b) return false;
+  if (a === b) return true;
+  // "twenty-six" span vs "twenty" tts → a starts with b
+  return a.startsWith(b) || b.startsWith(a);
 }
 
 function pauseHighlighting() {
@@ -340,7 +367,7 @@ function resumeHighlighting() {
   turn.ttsPaused = false;
   if (turn.ttsTimeOffset != null) turn.ttsTimeOffset += pauseDuration;
   // Re-schedule everything still in the queue.
-  for (const w of turn.ttsQueue) scheduleQueuedHighlight(w.idx, w.text, w.ptsMs);
+  for (const w of turn.ttsQueue) scheduleQueuedHighlight(w.seq, w.text, w.ptsMs);
 }
 
 function cancelHighlighting() {
@@ -361,6 +388,7 @@ function endPlaybackHighlight() {
   }
   turn.speakingBubble = null;
   turn.speakingWordIdx = 0;
+  turn.highlightSpanIdx = -1;
   turn.ttsTimeOffset = null;
   state.speaking = false;
   updateStatus();
@@ -427,6 +455,7 @@ function handleUpstreamEvent(msg) {
     }
     turn.speakingBubble = activeBubble;
     turn.speakingWordIdx = 0;
+    turn.highlightSpanIdx = -1;
     turn.ttsTimeOffset = null;
     state.speaking = !!activeBubble;
     updateStatus();
@@ -462,11 +491,14 @@ function clearLog() {
   els.log.innerHTML = '';
   placeholderEl = null;
   cancelPendingHighlights();
+  turn.ttsQueue.length = 0;
+  turn.ttsPaused = false;
   turn.interim = null;
   turn.assistant = null;
   turn.assistantText = '';
   turn.speakingBubble = null;
   turn.speakingWordIdx = 0;
+  turn.highlightSpanIdx = -1;
   turn.ttsTimeOffset = null;
 }
 

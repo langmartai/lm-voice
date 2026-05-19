@@ -39,11 +39,15 @@ const turn = {
   assistantText: '',
   speakingBubble: null,
   speakingWordIdx: 0,
-  // Offset that maps server pts_ms to local performance.now(). Locked in on
-  // the FIRST tts_word of each turn (the server's pts_ms isn't 0-based at
-  // playback_start — it's relative to a session-wide reference around 5-6s).
   ttsTimeOffset: null,
-  pendingWordTimers: [],       // active setTimeout IDs for scheduled highlights
+  pendingWordTimers: [],
+  // Queue of tts_word events still waiting to be highlighted. When playback
+  // is paused, we cancel the in-flight setTimeouts; on resume we re-schedule
+  // the unfired ones with the offset shifted by the pause duration. On
+  // cancel, we clear the queue entirely.
+  ttsQueue: [],                // [{ idx, text, ptsMs }, ...] pending
+  ttsPaused: false,
+  ttsPausedAt: 0,
 };
 
 let placeholderEl = null;
@@ -210,12 +214,43 @@ function ensureAssistantBubble() {
   return turn.assistant;
 }
 
+// Rebuild the bubble's HTML as word spans + whitespace text nodes from the
+// full accumulated text. This is called on every delta so spans always reflect
+// the current text — necessary because playback_start can fire BEFORE all
+// content_block_deltas have arrived (e.g. when Claude does a tool call mid-
+// response). We preserve which span was highlighted so the rebuild doesn't
+// drop the user-visible "speaking" state mid-word.
 function appendAssistantDelta(text) {
   if (!text) return;
   const b = ensureAssistantBubble();
   turn.assistantText += text;
-  b.textContent = turn.assistantText;
+  rebuildAssistantSpans(b, turn.assistantText);
   scrollToBottom();
+}
+
+function rebuildAssistantSpans(bubble, fullText) {
+  // Preserve which word index was highlighted before the rebuild.
+  let speakingIdx = -1;
+  const oldSpans = bubble.querySelectorAll('.word');
+  for (let i = 0; i < oldSpans.length; i++) {
+    if (oldSpans[i].classList.contains('speaking')) { speakingIdx = i; break; }
+  }
+  bubble.innerHTML = '';
+  for (const part of fullText.split(/(\s+)/)) {
+    if (!part.length) continue;
+    if (/^\s+$/.test(part)) bubble.appendChild(document.createTextNode(part));
+    else {
+      const span = document.createElement('span');
+      span.className = 'word';
+      span.textContent = part;
+      bubble.appendChild(span);
+    }
+  }
+  if (speakingIdx >= 0) {
+    const newSpans = bubble.querySelectorAll('.word');
+    const target = newSpans[speakingIdx];
+    if (target) target.classList.add('speaking');
+  }
 }
 
 function finalizeAssistant() {
@@ -258,31 +293,29 @@ function findAssistantBubbleForPlayback() {
 // then setTimeout each highlight to fire at (zero + pts_ms).
 function scheduleWordHighlight(text, ptsMs) {
   if (!turn.speakingBubble) {
-    // Defensive: if there's still a streaming assistant bubble (e.g. tts_word
-    // arrived before playback_start finalized it), finalize it now so it has
-    // word spans we can target. Otherwise findAssistantBubbleForPlayback
-    // would skip it and lock onto the PREVIOUS turn's bubble.
     if (turn.assistant) finalizeAssistant();
     turn.speakingBubble = findAssistantBubbleForPlayback();
     turn.speakingWordIdx = 0;
   }
   if (!turn.speakingBubble) return;
   const pts = Math.max(0, ptsMs ?? 0);
-  // Anchor on the FIRST tts_word event of each playback turn. The server's
-  // pts_ms isn't 0-based — it's session/upstream-relative (~5000 ms for the
-  // first word), so we can't compute target time from playback_start alone.
-  // Instead, when the first word arrives, capture `local_now - pts` as the
-  // offset; every subsequent word in the same turn schedules at offset+pts.
   if (turn.ttsTimeOffset == null) {
     turn.ttsTimeOffset = performance.now() - pts;
   }
-  // Capture both the index AND the bubble in the closure so a stale timer
-  // from a prior turn never lights up a span in the current one.
   const idx = turn.speakingWordIdx++;
+  turn.ttsQueue.push({ idx, text, ptsMs: pts });
+  if (!turn.ttsPaused) scheduleQueuedHighlight(idx, text, pts);
+}
+
+function scheduleQueuedHighlight(idx, text, pts) {
   const bubble = turn.speakingBubble;
+  if (!bubble) return;
   const targetTime = turn.ttsTimeOffset + pts;
   const delay = Math.max(0, targetTime - performance.now());
   const id = setTimeout(() => {
+    // Pop this word from the pending queue so pause/cancel skip it.
+    const qi = turn.ttsQueue.findIndex((w) => w.idx === idx);
+    if (qi >= 0) turn.ttsQueue.splice(qi, 1);
     if (!bubble.isConnected) return;
     const spans = bubble.querySelectorAll('.word');
     spans.forEach((s) => s.classList.remove('speaking'));
@@ -295,8 +328,35 @@ function scheduleWordHighlight(text, ptsMs) {
   turn.pendingWordTimers.push(id);
 }
 
+function pauseHighlighting() {
+  if (turn.ttsPaused) return;
+  turn.ttsPaused = true;
+  turn.ttsPausedAt = performance.now();
+  cancelPendingHighlights();        // timers are wall-clock; cancel them
+}
+
+function resumeHighlighting() {
+  if (!turn.ttsPaused) return;
+  const pauseDuration = performance.now() - turn.ttsPausedAt;
+  turn.ttsPaused = false;
+  if (turn.ttsTimeOffset != null) turn.ttsTimeOffset += pauseDuration;
+  // Re-schedule everything still in the queue.
+  for (const w of turn.ttsQueue) scheduleQueuedHighlight(w.idx, w.text, w.ptsMs);
+}
+
+function cancelHighlighting() {
+  cancelPendingHighlights();
+  turn.ttsQueue.length = 0;
+  turn.ttsPaused = false;
+  if (turn.speakingBubble) {
+    turn.speakingBubble.querySelectorAll('.word.speaking').forEach((s) => s.classList.remove('speaking'));
+  }
+}
+
 function endPlaybackHighlight() {
   cancelPendingHighlights();
+  turn.ttsQueue.length = 0;
+  turn.ttsPaused = false;
   if (turn.speakingBubble) {
     turn.speakingBubble.querySelectorAll('.word.speaking').forEach((s) => s.classList.remove('speaking'));
   }
@@ -313,7 +373,7 @@ function handleSseInner(inner) {
   const data = inner.data || {};
   if (t === 'conversation_ready') lifecyclePulse('— conversation ready —');
   else if (t === 'message_start') {
-    finalizeInterim();           // lock the user transcript before assistant starts
+    finalizeInterim();
     ensureAssistantBubble();
   }
   else if (t === 'content_block_delta') appendAssistantDelta(data?.delta?.text || '');
@@ -353,24 +413,22 @@ function handleUpstreamEvent(msg) {
   if (t === 'transcription_start') return;     // Deepgram batch boundary; silent
   if (t === 'user_input_end') return;          // VAD batch boundary, fires repeatedly; silent
   if (t === 'playback_start') {
-    // A new TTS playback is starting. Cancel any pending highlight timers
-    // from the previous playback so they can't fire against the new bubble,
-    // then capture THIS playback's bubble directly (don't search the log —
-    // that picks the wrong bubble when multiple finalized bubbles exist).
     cancelPendingHighlights();
-    let activeBubble = null;
-    if (turn.assistant) {
-      activeBubble = turn.assistant;
-      finalizeAssistant();           // splits bubble into word spans
-    } else {
-      // No live bubble (message_complete already finalized it, or playback_start
-      // fired without a prior message_start). Fall back to most recent finalized
-      // assistant bubble.
-      activeBubble = findAssistantBubbleForPlayback();
+    // Don't finalize — content_block_deltas may still arrive after this
+    // (Claude does tool calls mid-response and the rest of the text streams
+    // AFTER playback_start). The bubble keeps growing; appendAssistantDelta
+    // rebuilds spans incrementally, so highlights can always find the right
+    // span as the text grows.
+    let activeBubble = turn.assistant;
+    if (!activeBubble) activeBubble = findAssistantBubbleForPlayback();
+    // Make sure the bubble has at least its current text as spans, so the
+    // first few tts_words have something to land on.
+    if (activeBubble && !activeBubble.querySelector('.word') && activeBubble.textContent) {
+      rebuildAssistantSpans(activeBubble, activeBubble.textContent);
     }
     turn.speakingBubble = activeBubble;
     turn.speakingWordIdx = 0;
-    turn.ttsTimeOffset = null;        // re-anchor on first tts_word of this playback
+    turn.ttsTimeOffset = null;
     state.speaking = !!activeBubble;
     updateStatus();
     return;
@@ -528,6 +586,45 @@ async function pickConversation(convId) {
 els.btnNew.addEventListener('click', () => startNewSession());
 els.btnSwitch.addEventListener('click', () => openPicker());
 els.btnStop.addEventListener('click', () => stopSession());
+
+function sendBridge(obj) {
+  if (state.bridge && state.bridge.readyState === 1) {
+    state.bridge.send(JSON.stringify(obj));
+  }
+}
+
+function togglePausePlayback() {
+  if (!state.speaking && !turn.ttsPaused) return;   // nothing to pause
+  if (turn.ttsPaused) {
+    resumeHighlighting();
+    sendBridge({ _bridge: 'playback_resume' });
+    setStatus('speaking', 'Claude is speaking', '');
+  } else {
+    pauseHighlighting();
+    sendBridge({ _bridge: 'playback_pause' });
+    setStatus('thinking', 'Paused', 'press space to resume');
+  }
+}
+
+function cancelPlaybackHere() {
+  cancelHighlighting();
+  sendBridge({ _bridge: 'playback_cancel' });
+  state.speaking = false;
+  setStatus('idle', 'Playback cancelled', 'press space or talk to continue');
+}
+
+document.addEventListener('keydown', (e) => {
+  // Don't hijack typing inside form controls.
+  const tag = e.target?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) return;
+  if (e.code === 'Space') {
+    e.preventDefault();
+    togglePausePlayback();
+  } else if (e.code === 'Enter' || e.key === 'Enter') {
+    e.preventDefault();
+    cancelPlaybackHere();
+  }
+});
 els.pickerClose.addEventListener('click', () => els.picker.classList.add('hidden'));
 document.addEventListener('click', (e) => {
   if (els.picker.classList.contains('hidden')) return;

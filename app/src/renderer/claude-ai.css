@@ -113,6 +113,16 @@ html, body { margin: 0; padding: 0; height: 100%; background: #0f1219; color: #e
 .picker-item.active { background: #1f3a5a; }
 .picker-item.empty { color: #6b7384; padding: 20px; text-align: center; }
 
+.kbd-hint {
+  font-size: 10.5px;
+  color: #6b7384;
+  letter-spacing: 0.4px;
+  padding: 2px 8px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 4px;
+  user-select: none;
+}
+
 #toggle-debug {
   background: transparent;
   border: 1px solid #2a2f3b;

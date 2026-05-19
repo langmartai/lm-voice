@@ -220,6 +220,12 @@
     } else if (msg._bridge === 'playback_set') {
       playback.enabled = !!msg.enabled;
       sendLocal(JSON.stringify({ _bridge: 'playback_state', enabled: playback.enabled }));
+    } else if (msg._bridge === 'playback_pause') {
+      pausePlayback();
+    } else if (msg._bridge === 'playback_resume') {
+      resumePlayback();
+    } else if (msg._bridge === 'playback_cancel') {
+      cancelPlayback();
     }
   };
 
@@ -259,7 +265,16 @@
     state.local = ws;
   };
 
-  const playback = { ctx: null, nextStart: 0, enabled: true, framesPlayed: 0, bytesPlayed: 0 };
+  const playback = {
+    ctx: null,
+    nextStart: 0,
+    enabled: true,
+    paused: false,
+    dropping: false,        // true after cancel until next playback_start
+    activeSources: new Set(),
+    framesPlayed: 0,
+    bytesPlayed: 0,
+  };
 
   const ensurePlaybackCtx = () => {
     if (playback.ctx) return playback.ctx;
@@ -269,7 +284,7 @@
   };
 
   const playPcm16 = (arrayBuffer) => {
-    if (!playback.enabled) return;
+    if (!playback.enabled || playback.dropping) return;
     const ctx = ensurePlaybackCtx();
     const samples = arrayBuffer.byteLength >>> 1;
     if (!samples) return;
@@ -282,9 +297,44 @@
     src.connect(ctx.destination);
     const start = Math.max(playback.nextStart, ctx.currentTime);
     src.start(start);
+    playback.activeSources.add(src);
+    src.onended = () => playback.activeSources.delete(src);
     playback.nextStart = start + buf.duration;
     playback.framesPlayed++;
     playback.bytesPlayed += arrayBuffer.byteLength;
+  };
+
+  const pausePlayback = async () => {
+    if (!playback.ctx || playback.paused) return { ok: true, alreadyPaused: playback.paused };
+    try { await playback.ctx.suspend(); } catch {}
+    playback.paused = true;
+    sendLocal(JSON.stringify({ _bridge: 'playback_paused' }));
+    return { ok: true };
+  };
+
+  const resumePlayback = async () => {
+    if (!playback.ctx || !playback.paused) return { ok: true, alreadyRunning: !playback.paused };
+    try { await playback.ctx.resume(); } catch {}
+    playback.paused = false;
+    sendLocal(JSON.stringify({ _bridge: 'playback_resumed' }));
+    return { ok: true };
+  };
+
+  const cancelPlayback = () => {
+    // Stop all currently-queued audio sources and start dropping incoming
+    // PCM until the next playback_start. AudioContext stays alive.
+    for (const src of playback.activeSources) {
+      try { src.stop(); } catch {}
+    }
+    playback.activeSources.clear();
+    if (playback.ctx) playback.nextStart = playback.ctx.currentTime;
+    playback.dropping = true;
+    if (playback.paused) {
+      try { playback.ctx?.resume(); } catch {}
+      playback.paused = false;
+    }
+    sendLocal(JSON.stringify({ _bridge: 'playback_cancelled' }));
+    return { ok: true };
   };
 
   const openUpstream = (opts) => {
@@ -303,6 +353,12 @@
     };
     ws.onmessage = (e) => {
       if (typeof e.data === 'string') {
+        // Detect playback_start from the server and clear the post-cancel
+        // drop state so the next TTS turn plays normally again.
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg?.type === 'playback_start') playback.dropping = false;
+        } catch {}
         sendLocal(e.data);
       } else {
         if (playback.enabled) {
@@ -347,8 +403,15 @@
       sendLocal(JSON.stringify({ _bridge: 'playback_state', enabled: playback.enabled }));
       return playback.enabled;
     },
+    pausePlayback, resumePlayback, cancelPlayback,
     playbackStatus() {
-      return { enabled: playback.enabled, framesPlayed: playback.framesPlayed, bytesPlayed: playback.bytesPlayed };
+      return {
+        enabled: playback.enabled,
+        paused: playback.paused,
+        dropping: playback.dropping,
+        framesPlayed: playback.framesPlayed,
+        bytesPlayed: playback.bytesPlayed,
+      };
     },
     detach() {
       if (state.upstream) {

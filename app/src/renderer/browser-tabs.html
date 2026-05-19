@@ -16,7 +16,21 @@
     .tab .dot.ok { background: #5ac46a; }
     .tab .dot.warn { background: #e0a23a; }
     .tab .dot.err { background: #e15050; }
-    .right { display: flex; align-items: center; padding: 0 12px; gap: 12px; -webkit-app-region: no-drag; font-size: 11px; color: #6b7384; }
+    .right { display: flex; align-items: center; padding: 0 12px; gap: 10px; -webkit-app-region: no-drag; font-size: 11px; color: #6b7384; }
+    #btn-reload {
+      background: transparent;
+      border: 1px solid #2a2f3b;
+      color: #aab1bd;
+      width: 26px; height: 22px;
+      border-radius: 5px;
+      font-size: 13px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    #btn-reload:hover { background: #1d212c; color: #d8e1ff; }
+    #btn-reload:active { transform: rotate(180deg); transition: transform 250ms; }
     .right .pill { background: #1d212c; padding: 3px 8px; border-radius: 999px; color: #aab1bd; }
     .right .pill.ok { background: #1d3826; color: #b6f0c9; }
     .right .pill.warn { background: #3a2e1a; color: #e0a23a; }
@@ -30,6 +44,7 @@
       <div class="tab" data-tab="conversation"><span class="dot" id="dot-tab-conv"></span>Conversation</div>
     </div>
     <div class="right">
+      <button id="btn-reload" title="Reload the Claude.ai page">↻</button>
       <span class="pill" id="pill-page">page: …</span>
       <span class="pill" id="pill-up">upstream: …</span>
     </div>
@@ -46,6 +61,9 @@
     });
     ipcRenderer.on('claude-ai-browser:tab-state', (_, payload) => {
       tabs.forEach((t) => t.classList.toggle('active', t.dataset.tab === payload.active));
+    });
+    document.getElementById('btn-reload').addEventListener('click', () => {
+      ipcRenderer.send('claude-ai-browser:reload-claude-ai');
     });
     ipcRenderer.on('claude-ai-browser:bridge-state', (_, s) => {
       const pageOk = !!s?.pageAttached;

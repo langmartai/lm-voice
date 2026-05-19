@@ -162,6 +162,11 @@ class VoiceApiServer {
         const result = await this.handlers.claudeAiBrowserCreateConversation(body || {});
         return sendJson(res, result.ok ? 200 : 500, result);
       }
+      if (req.method === 'DELETE' && p.startsWith('/api/claude-ai/browser/conversations/')) {
+        const convId = p.split('/').pop();
+        const result = await this.handlers.claudeAiBrowserDeleteConversation({ convId });
+        return sendJson(res, result?.ok ? 200 : (result?.status || 500), result);
+      }
       if (req.method === 'POST' && p === '/api/claude-ai/browser/completion') {
         const body = await readJson(req);
         const result = await this.handlers.claudeAiBrowserSendCompletion(body || {});

@@ -901,6 +901,37 @@ async function createConversationViaBrowser({ name = 'LM Voice session', model =
   return claudeAiBrowserExecuteJs(code);
 }
 
+async function deleteConversationViaBrowser({ convId } = {}) {
+  if (!convId) return { ok: false, error: 'convId is required' };
+  const safeUuid = String(convId).replace(/[^a-f0-9-]/gi, '');
+  const code = `
+    (async () => {
+      const orgMatch = document.cookie.match(/lastActiveOrg=([^;]+)/);
+      if (!orgMatch) return { ok: false, error: 'not logged in' };
+      const org = decodeURIComponent(orgMatch[1]);
+      const cookies = Object.fromEntries(document.cookie.split(';').map(p => {
+        const i = p.indexOf('='); return [p.slice(0, i).trim(), p.slice(i + 1).trim()];
+      }));
+      const headers = {
+        'anthropic-client-platform': 'web_claude_ai',
+        'anthropic-client-version': '1.0.0',
+        'anthropic-client-sha':      '8a753cbf88e19be0f5f67efefb1b07840b6402e9',
+        'Accept': '*/*',
+      };
+      if (cookies['anthropic-device-id']) headers['anthropic-device-id']    = cookies['anthropic-device-id'];
+      if (cookies['ajs_anonymous_id'])    headers['anthropic-anonymous-id'] = cookies['ajs_anonymous_id'];
+      if (cookies['activitySessionId'])   headers['x-activity-session-id']  = cookies['activitySessionId'];
+      const url = \`/api/organizations/\${org}/chat_conversations/${safeUuid}\`;
+      try {
+        const r = await fetch(url, { method: 'DELETE', credentials: 'include', headers });
+        const t = await r.text();
+        return { ok: r.ok, status: r.status, body: t.slice(0, 200) };
+      } catch (e) { return { ok: false, error: String(e.message || e) }; }
+    })()
+  `;
+  return claudeAiBrowserExecuteJs(code);
+}
+
 async function sendCompletionViaBrowser({ convId, prompt, model = 'claude-opus-4-7', timezone, locale = 'en-US' } = {}) {
   if (!convId) return { ok: false, error: 'convId is required' };
   if (typeof prompt !== 'string' || !prompt.length) return { ok: false, error: 'prompt is required' };
@@ -1041,6 +1072,12 @@ ipcMain.on('claude-ai-browser:ready', () => {
   try {
     claudeAiBrowser?.webContents.send('claude-ai-browser:tab-state', { active: claudeAiViews.active });
   } catch {}
+});
+ipcMain.on('claude-ai-browser:reload-claude-ai', () => {
+  const wc = claudeAiViews?.claudeAi?.webContents;
+  if (wc && !wc.isDestroyed()) {
+    try { wc.reload(); } catch (err) { logError('claude-ai reload', err); }
+  }
 });
 
 ipcMain.handle('claude-ai:get-page-snippet', async () => {
@@ -2662,6 +2699,7 @@ async function init() {
           return { ok: true, convId: usedConvId, createdConv, contextResult, autoStartMic: !!autoStartMic };
         },
         claudeAiBrowserCreateConversation: async (opts = {}) => createConversationViaBrowser(opts),
+        claudeAiBrowserDeleteConversation: async (opts = {}) => deleteConversationViaBrowser(opts),
         claudeAiBrowserListConversations: async ({ limit = 20 } = {}) => {
           const lim = Math.max(1, Math.min(100, Number(limit) || 20));
           const code = `

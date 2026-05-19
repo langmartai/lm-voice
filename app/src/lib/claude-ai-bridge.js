@@ -178,10 +178,12 @@ class ClaudeAiBridge extends EventEmitter {
   }
 
   _handleRendererControl(msg) {
-    if (msg._bridge === 'open' || msg._bridge === 'close') {
-      if (this.page && this.page.readyState === WebSocket.OPEN) {
-        try { this.page.send(JSON.stringify(msg)); } catch {}
-      }
+    // Forward every renderer-issued _bridge:* control to the page. The page
+    // snippet has its own switch that decides which ones to act on (open,
+    // close, mic_start, mic_stop, playback_pause, playback_resume,
+    // playback_cancel, playback_set, ...) — the bridge stays transparent.
+    if (this.page && this.page.readyState === WebSocket.OPEN) {
+      try { this.page.send(JSON.stringify(msg)); } catch {}
     }
   }
 

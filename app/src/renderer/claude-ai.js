@@ -642,11 +642,28 @@ document.addEventListener('keydown', (e) => {
   const tag = e.target?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) return;
   if (e.code === 'Space') {
-    e.preventDefault();
-    togglePausePlayback();
+    // While Claude is speaking (or paused) → toggle pause/resume.
+    // Otherwise, if a new session can be started (no upstream open and page
+    // attached) → start one. Falls through quietly when neither applies.
+    if (state.speaking || turn.ttsPaused) {
+      e.preventDefault();
+      togglePausePlayback();
+    } else if (state.pageAttached && !state.upstreamOpen) {
+      e.preventDefault();
+      startNewSession();
+    }
   } else if (e.code === 'Enter' || e.key === 'Enter') {
-    e.preventDefault();
-    cancelPlaybackHere();
+    // Enter cancels the current playback (lets the user keep talking).
+    if (state.speaking || turn.ttsPaused) {
+      e.preventDefault();
+      cancelPlaybackHere();
+    }
+  } else if (e.code === 'Escape' || e.key === 'Escape') {
+    // Esc stops the upstream entirely (ends the voice session).
+    if (state.upstreamOpen) {
+      e.preventDefault();
+      stopSession();
+    }
   }
 });
 els.pickerClose.addEventListener('click', () => els.picker.classList.add('hidden'));

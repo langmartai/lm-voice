@@ -13,7 +13,19 @@
       <span id="status-dot" class="dot"></span>
       <span id="status-text">Connecting…</span>
       <span id="status-detail"></span>
+      <span class="spacer"></span>
+      <button id="btn-new" class="action primary" title="Create a fresh conversation and open voice mode">▶ New session</button>
+      <button id="btn-switch" class="action" title="Switch to an existing conversation">↺ Switch…</button>
+      <button id="btn-stop" class="action danger" title="Close the voice session" disabled>■ Stop</button>
       <button id="toggle-debug" title="Show raw event stream">debug</button>
+    </div>
+
+    <div id="picker" class="hidden">
+      <div class="picker-head">
+        <span>Switch to conversation</span>
+        <button id="picker-close" title="Close">×</button>
+      </div>
+      <div id="picker-body" class="picker-body"><div class="picker-loading">loading…</div></div>
     </div>
 
     <div id="log" aria-live="polite"></div>

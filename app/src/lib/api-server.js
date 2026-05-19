@@ -41,6 +41,12 @@ class VoiceApiServer {
   async _route(req, res) {
     const url = new URL(req.url, `http://${this.host}:${this.port}`);
     const p = url.pathname;
+    // CORS — the API listens on 127.0.0.1 only, so allow renderers (file://)
+    // and any localhost origin to call it from JS.
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
     try {
       if (req.method === 'GET' && p === '/api/state') {
         return sendJson(res, 200, await this.handlers.state());

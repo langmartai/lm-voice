@@ -2639,6 +2639,12 @@ async function init() {
           if (!claudeAiBridge?.status().pageAttached) {
             return { ok: false, step: 'open-upstream', error: 'page not attached — open the embedded browser first', convId: usedConvId, createdConv, contextResult };
           }
+          // Navigate the claude.ai BrowserView to the conversation page so both
+          // tabs stay in sync. Fire-and-forget — voice WS works regardless of
+          // the embedded page's URL.
+          if (claudeAiViews.claudeAi && !claudeAiViews.claudeAi.webContents.isDestroyed()) {
+            try { claudeAiViews.claudeAi.webContents.loadURL(`https://claude.ai/chat/${usedConvId}`); } catch {}
+          }
           const openMsg = { _bridge: 'open', convId: usedConvId, voice, language };
           if (autoStartMic) openMsg.autoStartMic = true;
           const opened = claudeAiBridge.sendToPageText(JSON.stringify(openMsg));
@@ -2647,9 +2653,6 @@ async function init() {
         },
         claudeAiBrowserCreateConversation: async (opts = {}) => createConversationViaBrowser(opts),
         claudeAiBrowserListConversations: async ({ limit = 20 } = {}) => {
-          if (!claudeAiBrowser || claudeAiBrowser.isDestroyed()) {
-            return { ok: false, error: 'embedded browser not open' };
-          }
           const lim = Math.max(1, Math.min(100, Number(limit) || 20));
           const code = `
             (async () => {
@@ -2677,17 +2680,17 @@ async function init() {
               } catch (e) { return { ok: false, error: String(e.message || e) }; }
             })()
           `;
-          try {
-            const result = await claudeAiBrowser.webContents.executeJavaScript(code, true);
-            return result;
-          } catch (e) {
-            return { ok: false, error: e.message };
-          }
+          return claudeAiBrowserExecuteJs(code);
         },
-        claudeAiUpstreamOpen: async ({ convId, orgId, voice, language, timezone, autoStartMic }) => {
+        claudeAiUpstreamOpen: async ({ convId, orgId, voice, language, timezone, autoStartMic, navigateToConv = true }) => {
           if (!claudeAiBridge) return { ok: false, error: 'bridge not running' };
           if (!claudeAiBridge.status().pageAttached) {
             return { ok: false, error: 'page snippet not attached — paste it into a claude.ai devtools console first' };
+          }
+          // Navigate the embedded claude.ai tab to the same conversation so the
+          // two tabs are visually in sync.
+          if (navigateToConv && convId && claudeAiViews.claudeAi && !claudeAiViews.claudeAi.webContents.isDestroyed()) {
+            try { claudeAiViews.claudeAi.webContents.loadURL(`https://claude.ai/chat/${convId}`); } catch {}
           }
           const msg = { _bridge: 'open', convId };
           if (orgId) msg.orgId = orgId;

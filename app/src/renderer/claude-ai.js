@@ -6,12 +6,20 @@ const els = {
   statusDot:    document.getElementById('status-dot'),
   statusText:   document.getElementById('status-text'),
   statusDetail: document.getElementById('status-detail'),
+  btnNew:       document.getElementById('btn-new'),
+  btnSwitch:    document.getElementById('btn-switch'),
+  btnStop:      document.getElementById('btn-stop'),
   toggleDebug:  document.getElementById('toggle-debug'),
   log:          document.getElementById('log'),
   debugPanel:   document.getElementById('debug-panel'),
   events:       document.getElementById('events'),
   clearEvents:  document.getElementById('clear-events'),
+  picker:       document.getElementById('picker'),
+  pickerBody:   document.getElementById('picker-body'),
+  pickerClose:  document.getElementById('picker-close'),
 };
+
+const API_BASE = 'http://127.0.0.1:3199';
 
 const BRIDGE_URL = 'ws://127.0.0.1:8765/?role=renderer';
 
@@ -46,25 +54,22 @@ function setStatus(level, text, detail) {
 function updateStatus() {
   if (!state.bridge || state.bridge.readyState !== 1) {
     setStatus('err', 'Bridge disconnected', 'reconnecting…');
-    return;
-  }
-  if (!state.pageAttached) {
+  } else if (!state.pageAttached) {
     setStatus('err', 'Page bridge not attached', 'open the Claude.ai tab');
-    return;
-  }
-  if (state.speaking) {
+  } else if (state.speaking) {
     setStatus('speaking', 'Claude is speaking', '');
-    return;
-  }
-  if (state.upstreamOpen && state.micRunning) {
+  } else if (state.upstreamOpen && state.micRunning) {
     setStatus('listening', 'Listening', 'speak any time');
-    return;
-  }
-  if (state.upstreamOpen) {
+  } else if (state.upstreamOpen) {
     setStatus('thinking', 'Voice session open', 'mic off');
-    return;
+  } else {
+    setStatus('idle', 'Idle', 'no voice session');
   }
-  setStatus('idle', 'Idle', 'no voice session');
+  // Buttons reflect the action available right now.
+  const canStart = state.pageAttached && !state.upstreamOpen;
+  els.btnNew.disabled = !canStart;
+  els.btnSwitch.disabled = !canStart;
+  els.btnStop.disabled = !state.upstreamOpen;
 }
 
 function ensurePlaceholder() {
@@ -359,7 +364,126 @@ function playPcm(arrayBuffer) {
   state.pcmNextStart = start + buf.duration;
 }
 
+// --- API helpers (the renderer talks directly to lm-voice's local HTTP API) -
+
+async function api(path, opts = {}) {
+  const url = `${API_BASE}${path}`;
+  const init = {
+    method: opts.method || 'GET',
+    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+  };
+  if (opts.body !== undefined) init.body = JSON.stringify(opts.body);
+  const r = await fetch(url, init);
+  const text = await r.text();
+  try { return JSON.parse(text); } catch { return { ok: r.ok, status: r.status, raw: text }; }
+}
+
+function clearLog() {
+  els.log.innerHTML = '';
+  placeholderEl = null;
+  turn.interim = null;
+  turn.interimSeq = null;
+  turn.assistant = null;
+  turn.assistantText = '';
+  turn.speakingBubble = null;
+  turn.speakingWordIdx = 0;
+}
+
+async function startNewSession() {
+  els.btnNew.disabled = true;
+  els.btnSwitch.disabled = true;
+  clearLog();
+  setStatus('thinking', 'Starting new session…', '');
+  try {
+    const r = await api('/api/claude-ai/session/start', {
+      method: 'POST',
+      body: { voice: 'airy', autoStartMic: true },
+    });
+    if (!r?.ok) {
+      addRow('error', `Could not start: ${r?.error || JSON.stringify(r)}`);
+    } else {
+      lifecyclePulse(`new conversation · ${r.convId?.slice(0, 8) || ''}`);
+    }
+  } catch (e) {
+    addRow('error', `Could not start: ${e.message}`);
+  } finally {
+    updateStatus();
+  }
+}
+
+async function stopSession() {
+  els.btnStop.disabled = true;
+  try {
+    await api('/api/claude-ai/upstream/close', { method: 'POST' });
+  } catch (e) {
+    addRow('error', `Could not stop: ${e.message}`);
+  } finally {
+    updateStatus();
+  }
+}
+
+async function openPicker() {
+  els.picker.classList.remove('hidden');
+  els.pickerBody.innerHTML = '<div class="picker-loading">loading…</div>';
+  try {
+    const r = await api('/api/claude-ai/browser/conversations?limit=15');
+    let list = r?.conversations;
+    if (Array.isArray(list?.data)) list = list.data;
+    if (!Array.isArray(list) || list.length === 0) {
+      els.pickerBody.innerHTML = '<div class="picker-item empty">No conversations found</div>';
+      return;
+    }
+    els.pickerBody.innerHTML = '';
+    for (const c of list) {
+      const div = document.createElement('div');
+      div.className = 'picker-item';
+      const updated = c.updated_at ? new Date(c.updated_at).toLocaleString() : '';
+      const platform = c.platform === 'VOICE' ? ' · voice' : '';
+      div.innerHTML = `<div>${escapeHtml(c.name || '(untitled)')}</div><div class="meta">${updated}${platform} · ${c.uuid?.slice(0, 8) || ''}</div>`;
+      div.addEventListener('click', () => pickConversation(c.uuid));
+      els.pickerBody.appendChild(div);
+    }
+  } catch (e) {
+    els.pickerBody.innerHTML = `<div class="picker-item empty">Error: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function pickConversation(convId) {
+  if (!convId) return;
+  els.picker.classList.add('hidden');
+  els.btnNew.disabled = true;
+  els.btnSwitch.disabled = true;
+  clearLog();
+  setStatus('thinking', 'Switching conversation…', convId.slice(0, 8));
+  try {
+    const r = await api('/api/claude-ai/upstream/open', {
+      method: 'POST',
+      body: { convId, voice: 'airy', autoStartMic: true },
+    });
+    if (!r?.ok) addRow('error', `Could not switch: ${r?.error || JSON.stringify(r)}`);
+    else lifecyclePulse(`switched · ${convId.slice(0, 8)}`);
+  } catch (e) {
+    addRow('error', `Could not switch: ${e.message}`);
+  } finally {
+    updateStatus();
+  }
+}
+
 // --- UI wiring ---------------------------------------------------------------
+
+els.btnNew.addEventListener('click', () => startNewSession());
+els.btnSwitch.addEventListener('click', () => openPicker());
+els.btnStop.addEventListener('click', () => stopSession());
+els.pickerClose.addEventListener('click', () => els.picker.classList.add('hidden'));
+document.addEventListener('click', (e) => {
+  if (els.picker.classList.contains('hidden')) return;
+  if (e.target === els.btnSwitch || els.picker.contains(e.target)) return;
+  els.picker.classList.add('hidden');
+});
 
 els.toggleDebug.addEventListener('click', () => {
   els.debugPanel.classList.toggle('hidden');

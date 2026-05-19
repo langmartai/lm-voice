@@ -168,7 +168,7 @@
     }
   };
 
-  const stopMic = async () => {
+  const stopMic = async ({ silent = false } = {}) => {
     state.mic.running = false;
     try { state.mic.reader?.cancel(); } catch {}
     if (state.mic.encoder && state.mic.encoder.state === 'configured') {
@@ -179,7 +179,9 @@
     state.mic.stream = null;
     state.mic.encoder = null;
     state.mic.reader = null;
-    sendLocal(JSON.stringify({ _bridge: 'mic_stopped', framesSent: state.mic.framesSent, bytesSent: state.mic.bytesSent }));
+    if (!silent) {
+      sendLocal(JSON.stringify({ _bridge: 'mic_stopped', framesSent: state.mic.framesSent, bytesSent: state.mic.bytesSent }));
+    }
     state.mic.framesSent = 0;
     state.mic.bytesSent = 0;
     return { ok: true };
@@ -194,9 +196,17 @@
         if (msg.orgId) state.orgId = msg.orgId;
         if (!state.orgId) state.orgId = readOrgFromCookie();
         if (!state.orgId) throw new Error('open: orgId unavailable');
+        // Reopen: detach the old upstream's event handlers so it dies silently
+        // (no upstream_close event that would race with the new session's
+        // upstream_open). Also stop the old mic silently for the same reason.
         if (state.upstream) {
-          try { state.upstream.close(1000, 'reopen'); } catch {}
+          const old = state.upstream;
           state.upstream = null;
+          try { old.onopen = old.onmessage = old.onclose = old.onerror = null; } catch {}
+          try { old.close(1000, 'reopen'); } catch {}
+        }
+        if (state.mic.running) {
+          stopMic({ silent: true }).catch(() => {});
         }
         openUpstream({
           language: msg.language,

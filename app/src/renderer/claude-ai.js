@@ -47,6 +47,9 @@ const turn = {
   ttsQueue: [],
   ttsPaused: false,
   ttsPausedAt: 0,
+  // True from cancel until the next playback_start, so any tts_word events
+  // still arriving on the wire don't re-highlight on the cancelled bubble.
+  playbackCancelled: false,
 };
 
 let placeholderEl = null;
@@ -133,6 +136,9 @@ function openBridge() {
     state.upstreamOpen = false;
     state.micRunning = false;
     state.speaking = false;
+    // Stop any in-flight highlight timers — they'd fire against stale bubbles
+    // with no way for new events to update them until reconnect.
+    endPlaybackHighlight();
     updateStatus();
     setTimeout(openBridge, 1500);
   };
@@ -173,6 +179,9 @@ function handleBridgeControl(msg) {
     endPlaybackHighlight();
   } else if (msg._bridge === 'upstream_error') {
     state.upstreamOpen = false;
+    state.speaking = false;
+    finalizeAssistant();
+    endPlaybackHighlight();
   } else if (msg._bridge === 'mic_started') {
     state.micRunning = true;
   } else if (msg._bridge === 'mic_stopped') {
@@ -292,6 +301,9 @@ function findAssistantBubbleForPlayback() {
 // performance.now() captured at playback_start as the local audio-clock zero,
 // then setTimeout each highlight to fire at (zero + pts_ms).
 function scheduleWordHighlight(text, ptsMs) {
+  // User pressed Enter to cancel — drop any tts_word events that arrive
+  // before the next playback_start.
+  if (turn.playbackCancelled) return;
   if (!turn.speakingBubble) {
     if (turn.assistant) finalizeAssistant();
     turn.speakingBubble = findAssistantBubbleForPlayback();
@@ -374,6 +386,7 @@ function cancelHighlighting() {
   cancelPendingHighlights();
   turn.ttsQueue.length = 0;
   turn.ttsPaused = false;
+  turn.playbackCancelled = true;
   if (turn.speakingBubble) {
     turn.speakingBubble.querySelectorAll('.word.speaking').forEach((s) => s.classList.remove('speaking'));
   }
@@ -457,6 +470,7 @@ function handleUpstreamEvent(msg) {
     turn.speakingWordIdx = 0;
     turn.highlightSpanIdx = -1;
     turn.ttsTimeOffset = null;
+    turn.playbackCancelled = false;     // new playback, allow highlights again
     state.speaking = !!activeBubble;
     updateStatus();
     return;

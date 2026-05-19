@@ -371,6 +371,9 @@
       console.info('[lm-voice-bridge] upstream closed', e.code, e.reason);
       sendLocal(JSON.stringify({ _bridge: 'upstream_close', code: e.code, reason: e.reason }));
       if (state.upstream === ws) state.upstream = null;
+      // Mic has nowhere to send to — stop it instead of wasting CPU on Opus
+      // encoding into a dead socket.
+      if (state.mic.running) stopMic().catch(() => {});
     };
     ws.onerror = (e) => {
       console.warn('[lm-voice-bridge] upstream error', e);

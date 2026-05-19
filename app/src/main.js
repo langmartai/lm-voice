@@ -2619,7 +2619,13 @@ async function init() {
             openClaudeAiBrowser(url);
             return { ok: true, opened: true };
           }
-          try { await claudeAiBrowser.loadURL(url); } catch (e) { return { ok: false, error: e.message }; }
+          // Navigate the claude.ai BrowserView, NOT the host window — the
+          // host serves the tab-strip shell.
+          const wc = claudeAiViews?.claudeAi?.webContents;
+          if (!wc || wc.isDestroyed()) {
+            return { ok: false, error: 'claude.ai view not available' };
+          }
+          try { await wc.loadURL(url); } catch (e) { return { ok: false, error: e.message }; }
           return { ok: true };
         },
         claudeAiBrowserSendCompletion: async (opts = {}) => sendCompletionViaBrowser(opts),

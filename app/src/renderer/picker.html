@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:" />
+  <title>LM Voice — Pick session</title>
+  <link rel="stylesheet" href="picker.css" />
+</head>
+<body>
+  <div id="root">
+    <div id="header">
+      <div class="title-row">
+        <div class="title">LM Voice — pick a Claude Code session</div>
+        <button id="close-btn" title="Close (Esc)" aria-label="Close">×</button>
+      </div>
+      <div class="sub">replies run inside the selected session's project; voice in/out is logged locally</div>
+    </div>
+
+    <div id="server-row">
+      <label class="lab">Server</label>
+      <div class="server-bar">
+        <div id="server-chips"></div>
+        <button id="add-server-toggle" class="ghost" title="Add new server">+</button>
+      </div>
+      <div id="add-server" class="hidden">
+        <input id="new-url" type="text" placeholder="http://10.0.1.117:3100" spellcheck="false" autocomplete="off" />
+        <input id="new-label" type="text" placeholder="label (optional)" spellcheck="false" autocomplete="off" />
+        <button id="add-server-save">Add</button>
+        <button id="add-server-cancel" class="ghost">Cancel</button>
+      </div>
+      <div id="endpoint-status" class="muted">—</div>
+    </div>
+
+    <div id="tabs">
+      <button class="tab active" data-tab="sessions">Sessions</button>
+      <button class="tab" data-tab="recent">Recent</button>
+      <button class="tab" data-tab="history">History</button>
+    </div>
+
+    <div id="list-wrap">
+      <div id="sessions" class="tab-pane active" tabindex="-1"></div>
+      <div id="recent" class="tab-pane"></div>
+      <div id="history" class="tab-pane"></div>
+      <div id="empty" class="muted hidden">Nothing here yet.</div>
+      <div id="loading" class="muted hidden">Loading…</div>
+    </div>
+
+    <div id="footer">
+      <button id="refresh">Refresh</button>
+      <button id="skip" class="ghost">Skip — no session</button>
+    </div>
+  </div>
+  <script src="picker.js"></script>
+</body>
+</html>

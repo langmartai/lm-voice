@@ -1,0 +1,171 @@
+:root {
+  color-scheme: dark;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+}
+
+html, body { margin: 0; padding: 0; height: 100%; background: #0f1219; color: #e7e9ee; }
+
+#root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  box-sizing: border-box;
+}
+
+/* --- Status bar at top --- */
+#status-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: #14171f;
+  border-bottom: 1px solid #2a2f3b;
+  font-size: 13px;
+  color: #aab1bd;
+  flex-shrink: 0;
+}
+#status-bar .dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: #555;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.06);
+  transition: background-color 200ms;
+}
+#status-bar .dot.idle      { background: #555; }
+#status-bar .dot.listening { background: #4a8eff; box-shadow: 0 0 0 4px rgba(74, 142, 255, 0.18); }
+#status-bar .dot.thinking  { background: #e0a23a; box-shadow: 0 0 0 4px rgba(224, 162, 58, 0.18); animation: pulse 1.2s infinite ease-in-out; }
+#status-bar .dot.speaking  { background: #5ac46a; box-shadow: 0 0 0 4px rgba(90, 196, 106, 0.20); animation: pulse 1.0s infinite ease-in-out; }
+#status-bar .dot.err       { background: #e15050; }
+@keyframes pulse { 50% { transform: scale(1.25); } }
+
+#status-text { font-weight: 500; color: #e7e9ee; }
+#status-detail { color: #6b7384; font-size: 11.5px; margin-left: auto; }
+
+#toggle-debug {
+  background: transparent;
+  border: 1px solid #2a2f3b;
+  color: #6b7384;
+  padding: 3px 9px;
+  border-radius: 5px;
+  font-size: 11px;
+  cursor: pointer;
+}
+#toggle-debug:hover { background: #1d212c; color: #d8e1ff; }
+
+/* --- Main conversation log --- */
+#log {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 18px 18px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  scroll-behavior: smooth;
+}
+
+#log .row {
+  max-width: 720px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 14.5px;
+  line-height: 1.55;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+}
+#log .row.user      { background: #1a2138; color: #d8e1ff; align-self: flex-end; border-bottom-right-radius: 4px; }
+#log .row.user.interim { opacity: 0.6; font-style: italic; }
+#log .row.assistant { background: #182521; color: #d4f0e0; align-self: flex-start; border-bottom-left-radius: 4px; }
+#log .row.assistant.streaming::after {
+  content: '▍';
+  margin-left: 2px;
+  color: #7ad492;
+  animation: blink 0.9s steps(2) infinite;
+}
+#log .row.assistant .word {
+  padding: 0 1px;
+  border-radius: 3px;
+  transition: background-color 80ms linear, color 80ms linear;
+}
+#log .row.assistant .word.speaking {
+  background-color: rgba(122, 212, 146, 0.30);
+  color: #ffffff;
+}
+#log .row.system {
+  align-self: center;
+  background: transparent;
+  color: #6b7384;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  padding: 2px 8px;
+  border: none;
+  font-style: normal;
+}
+#log .row.error {
+  background: #2d1717;
+  color: #ff9a9a;
+  align-self: stretch;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 12px;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+/* Welcome placeholder when no conversation has started */
+#log .placeholder {
+  align-self: center;
+  color: #6b7384;
+  font-size: 12.5px;
+  padding: 60px 20px;
+  text-align: center;
+  max-width: 480px;
+}
+#log .placeholder .big {
+  display: block;
+  font-size: 28px;
+  margin-bottom: 8px;
+  color: #4a8eff;
+}
+
+/* --- Debug panel (collapsed by default) --- */
+#debug-panel {
+  flex: 0 0 auto;
+  max-height: 35vh;
+  display: flex;
+  flex-direction: column;
+  background: #0a0c12;
+  border-top: 1px solid #2a2f3b;
+  transition: max-height 200ms ease-out;
+}
+#debug-panel.hidden { max-height: 0; overflow: hidden; border-top: none; }
+.debug-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 12px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #6b7384;
+  border-bottom: 1px solid #1d212c;
+}
+.debug-head button {
+  background: transparent;
+  border: 1px solid #2a2f3b;
+  color: #6b7384;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  cursor: pointer;
+}
+#events {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  margin: 0;
+  padding: 6px 10px;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: #aab1bd;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

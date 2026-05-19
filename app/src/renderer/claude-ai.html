@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' blob: data:; connect-src ws://127.0.0.1:* http://127.0.0.1:*" />
+  <title>Conversation</title>
+  <link rel="stylesheet" href="claude-ai.css" />
+</head>
+<body>
+  <div id="root">
+    <div id="status-bar">
+      <span id="status-dot" class="dot"></span>
+      <span id="status-text">Connecting…</span>
+      <span id="status-detail"></span>
+      <button id="toggle-debug" title="Show raw event stream">debug</button>
+    </div>
+
+    <div id="log" aria-live="polite"></div>
+
+    <div id="debug-panel" class="hidden">
+      <div class="debug-head">raw server events <button id="clear-events">clear</button></div>
+      <pre id="events"></pre>
+    </div>
+  </div>
+  <script src="claude-ai.js"></script>
+</body>
+</html>

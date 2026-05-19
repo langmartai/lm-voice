@@ -1,0 +1,19 @@
+node_modules/
+dist/
+
+# Build artifacts
+*.log
+.DS_Store
+
+# Test outputs (vocab dumps, screenshots)
+app/test/out/
+
+# Large external models — downloaded on first run
+app/eng.traineddata
+app/assets/onnx/
+app/assets/voice_styles/
+
+# Editor
+.vscode/
+.idea/
+*.swp

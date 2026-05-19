@@ -15,8 +15,8 @@ const ONNX_FILES = [
   'onnx/text_encoder.onnx',
   'onnx/vector_estimator.onnx',
   'onnx/vocoder.onnx',
-  'onnx/cfgs.json',
-  'onnx/text_processor/unicode_indexer.json',
+  'onnx/tts.json',
+  'onnx/unicode_indexer.json',
 ];
 
 const VOICE_STYLE_FILES = ['M1', 'M2', 'M3', 'F1', 'F2', 'F3'].map((v) => `voice_styles/${v}.json`);
@@ -33,7 +33,8 @@ async function downloadOne(url, dest) {
       https.get(u, (res) => {
         if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && redirects > 0) {
           res.resume();
-          return tryGet(res.headers.location, redirects - 1);
+          const next = new URL(res.headers.location, u).toString();
+          return tryGet(next, redirects - 1);
         }
         if (res.statusCode !== 200) {
           file.close();

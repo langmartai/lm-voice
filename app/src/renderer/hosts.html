@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:" />
+  <title>LM Voice — Hosts &amp; Sessions</title>
+  <link rel="stylesheet" href="hosts.css" />
+</head>
+<body>
+  <div id="root">
+    <header>
+      <div class="title-block">
+        <h1>Hosts &amp; Sessions</h1>
+        <div class="sub" id="header-summary">—</div>
+      </div>
+      <div class="actions">
+        <button id="btn-discover" title="Scan Claude session files for hosts and probe each">Discover</button>
+        <button id="btn-refresh" title="Reload from meta-cache">Refresh</button>
+        <button id="btn-close" title="Close (Esc)" aria-label="Close">×</button>
+      </div>
+    </header>
+
+    <nav class="tabs">
+      <button class="tab active" data-tab="conversation">Conversation</button>
+      <button class="tab" data-tab="engine">Engine <span class="count" id="count-engine">0</span></button>
+      <button class="tab" data-tab="hosts">Hosts <span class="count" id="count-hosts">—</span></button>
+      <button class="tab" data-tab="projects">Projects <span class="count" id="count-projects">—</span></button>
+      <button class="tab" data-tab="sessions">Sessions <span class="count" id="count-sessions">—</span></button>
+    </nav>
+
+    <!-- CONVERSATION TAB -->
+    <div class="tab-pane" id="pane-conversation">
+      <div class="conv-head">
+        <div class="conv-status">
+          <span id="conv-dot" class="dot idle"></span>
+          <span id="conv-status-text">Idle</span>
+        </div>
+        <div class="conv-meta">
+          <span class="kv"><span class="k">Project</span><span class="v" id="conv-project">—</span></span>
+          <span class="kv"><span class="k">Session</span><span class="v" id="conv-session">—</span></span>
+          <span class="kv"><span class="k">Host</span><span class="v" id="conv-host">—</span></span>
+        </div>
+      </div>
+      <div id="conv-list" class="conv-body" aria-live="polite"></div>
+      <div class="conv-input-row">
+        <input id="conv-input" type="text" placeholder="Type and press Enter…  (or hold the hotkey to speak in the small popup)" spellcheck="false" autocomplete="off" />
+        <button id="conv-send" title="Send (Enter)">Send</button>
+      </div>
+    </div>
+
+    <!-- ENGINE TAB -->
+    <div class="tab-pane" id="pane-engine" hidden>
+      <div class="engine-toolbar">
+        <select id="engine-source-filter" title="Filter by source">
+          <option value="">All sources</option>
+          <option value="agent">Agent</option>
+          <option value="execution">Execution</option>
+          <option value="session">Session deltas</option>
+          <option value="screen">Screen OCR</option>
+          <option value="host">Hosts</option>
+          <option value="error">Errors</option>
+        </select>
+        <input id="engine-search" type="text" placeholder="Search log…" spellcheck="false" autocomplete="off" />
+        <button id="engine-clear" title="Clear local view (does not affect server log)">Clear view</button>
+        <label class="follow-toggle"><input type="checkbox" id="engine-follow" checked /> follow</label>
+      </div>
+      <div id="engine-list" class="engine-body" aria-live="polite"></div>
+    </div>
+
+    <!-- HOSTS TAB -->
+    <div class="tab-pane" id="pane-hosts" hidden>
+      <div class="filters">
+        <label class="seg"><input type="radio" name="host-filter" value="all" checked /><span>All</span></label>
+        <label class="seg"><input type="radio" name="host-filter" value="lm-assist" /><span>lm-assist</span></label>
+        <label class="seg"><input type="radio" name="host-filter" value="ssh" /><span>SSH only</span></label>
+        <input id="host-search" type="text" placeholder="Search hostname, IP, user…" spellcheck="false" autocomplete="off" />
+      </div>
+      <div class="split">
+        <aside id="host-list" aria-label="Host list"></aside>
+        <section id="host-detail" aria-label="Selected host detail"></section>
+      </div>
+    </div>
+
+    <!-- PROJECTS TAB -->
+    <div class="tab-pane" id="pane-projects" hidden>
+      <div class="filters">
+        <input id="proj-search" type="text" placeholder="Search project name or path…" spellcheck="false" autocomplete="off" />
+      </div>
+      <div class="split">
+        <aside id="project-list" aria-label="Project list"></aside>
+        <section id="project-detail" aria-label="Selected project detail"></section>
+      </div>
+    </div>
+
+    <!-- SESSIONS TAB -->
+    <div class="tab-pane" id="pane-sessions" hidden>
+      <div class="filters">
+        <select id="sess-host-filter" title="Filter by host">
+          <option value="">All hosts</option>
+        </select>
+        <select id="sess-recency-filter" title="Filter by recency">
+          <option value="0" selected>Any time</option>
+          <option value="3600000">Past hour</option>
+          <option value="86400000">Past 24 hours</option>
+          <option value="604800000">Past 7 days</option>
+          <option value="2592000000">Past 30 days</option>
+        </select>
+        <input id="sess-search" type="text" placeholder="Search project, prompt, session id…" spellcheck="false" autocomplete="off" />
+      </div>
+      <div class="split">
+        <aside id="session-list" aria-label="Session list"></aside>
+        <section id="session-detail" aria-label="Selected session detail"></section>
+      </div>
+    </div>
+
+    <footer><span id="status-text">Loading…</span></footer>
+  </div>
+  <script src="hosts.js"></script>
+</body>
+</html>

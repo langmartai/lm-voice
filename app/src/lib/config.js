@@ -8,12 +8,16 @@ const YAML = require('yaml');
 const DEFAULTS = {
   lmAssist: {
     endpoint: 'http://localhost:3100',
+    servers: [
+      { url: 'http://localhost:3100', label: 'local' },
+    ],
   },
   session: {
     id: null,
     cwd: null,
     label: null,
   },
+  recentSessions: [],
   stt: {
     provider: 'anthropic',
     language: 'en',
@@ -30,7 +34,7 @@ const DEFAULTS = {
     lang: 'en',
   },
   hotkey: {
-    pushToTalk: 'RIGHT CTRL',
+    pushToTalk: 'LEFT CTRL',
     mode: 'hold',
   },
   agent: {
@@ -45,6 +49,42 @@ const DEFAULTS = {
   ui: {
     showPopup: true,
     popupFadeMs: 2500,
+  },
+  // Voice-agent session continuity — a single Claude Code session is held
+  // per lm-assist endpoint and resumed on every turn so the model context
+  // stays warm and we skip the 10–15s fresh-spawn cost.
+  voiceAgent: {
+    sessions: {}, // { "<lmAssist-endpoint>": "<claude-session-id>" } — currently held session per endpoint
+    allSessions: [], // Every Claude Code session id this app has ever created. Used to filter the ambient watcher so we don't loop on our own past sessions. Capped at 200.
+    // Context budget — reset the held session when input context approaches
+    // the model's window so we don't hit a truncation/break.
+    contextLimit: 200000,    // Haiku 4.5 / Sonnet 4.6 / Opus 4.7 all ≥ 200K
+    contextThreshold: 0.75,  // trigger reset at 75% of limit (50K headroom)
+  },
+  // HTTP API — exposes the recording pipeline (STT/TTS/agent/run) for
+  // programmatic testing. Bound to 127.0.0.1 so it isn't exposed to the network.
+  api: {
+    enabled: true,
+    port: 3199,
+    host: '127.0.0.1',
+  },
+  // Ambient awareness — background polling of session conversations and
+  // (optionally) screen OCR. Deltas are buffered locally and prepended to
+  // the next user turn so the agent is aware of what's going on without
+  // burning tokens during idle time.
+  awareness: {
+    sessionDelta: {
+      enabled: true,
+      intervalMs: 30000,        // poll /sessions every 30s
+      activeWindowMs: 600000,   // only watch sessions modified in the last 10 min
+      maxNewMsgsPerSession: 6,
+    },
+    screenOcr: {
+      enabled: false,           // opt-in: needs `npm install tesseract.js`
+      intervalMs: 25000,        // capture + OCR every 25s
+      minDeltaChars: 60,        // ignore deltas shorter than this — reduces OCR noise
+      lang: 'eng',
+    },
   },
 };
 

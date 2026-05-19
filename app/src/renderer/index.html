@@ -9,21 +9,33 @@
 </head>
 <body>
   <div id="root">
-    <div id="status-row">
-      <span id="dot" class="dot idle"></span>
-      <span id="status">Idle</span>
+    <div id="header">
+      <div id="header-left">
+        <div id="status-row">
+          <span id="dot" class="dot idle"></span>
+          <span id="status">Idle</span>
+        </div>
+        <div id="session-row">
+          <span class="label">Session:</span>
+          <span id="session-name">none</span>
+        </div>
+        <div id="world-row">
+          <span class="label">World:</span>
+          <span id="world-project" class="world-chip" title="Click to open session picker">—</span>
+          <span id="world-active" class="world-chip" title="Click to open session picker">—</span>
+          <span id="world-hosts" class="world-chip" title="Click to open hosts &amp; sessions window">—</span>
+        </div>
+      </div>
+      <div id="header-right">
+        <button id="picker-btn" title="Open session picker (pick a session, view recent + past conversations)" aria-label="Open picker">☰</button>
+        <button id="pin-btn" title="Pin: keep popup open when you click elsewhere" aria-label="Pin popup">📌</button>
+        <button id="hide-btn" title="Hide (Esc)" aria-label="Hide">×</button>
+      </div>
     </div>
-    <div id="session-row">
-      <span class="label">Session:</span>
-      <span id="session-name">none</span>
-    </div>
-    <div id="transcript-row">
-      <div class="label">You said</div>
-      <div id="transcript">—</div>
-    </div>
-    <div id="reply-row">
-      <div class="label">Reply</div>
-      <div id="reply">—</div>
+    <div id="conv" aria-live="polite"></div>
+    <div id="input-row">
+      <input id="text-input" type="text" placeholder="Type and press Enter…  (or hold the hotkey to speak)" autocomplete="off" spellcheck="false" />
+      <button id="send-btn" title="Send (Enter)" aria-label="Send">→</button>
     </div>
   </div>
   <script src="index.js"></script>

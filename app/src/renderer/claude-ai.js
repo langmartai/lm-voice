@@ -39,7 +39,10 @@ const turn = {
   assistantText: '',
   speakingBubble: null,
   speakingWordIdx: 0,
-  playbackStartLocal: null,    // performance.now() when playback_start fired
+  // Offset that maps server pts_ms to local performance.now(). Locked in on
+  // the FIRST tts_word of each turn (the server's pts_ms isn't 0-based at
+  // playback_start — it's relative to a session-wide reference around 5-6s).
+  ttsTimeOffset: null,
   pendingWordTimers: [],       // active setTimeout IDs for scheduled highlights
 };
 
@@ -255,16 +258,29 @@ function findAssistantBubbleForPlayback() {
 // then setTimeout each highlight to fire at (zero + pts_ms).
 function scheduleWordHighlight(text, ptsMs) {
   if (!turn.speakingBubble) {
+    // Defensive: if there's still a streaming assistant bubble (e.g. tts_word
+    // arrived before playback_start finalized it), finalize it now so it has
+    // word spans we can target. Otherwise findAssistantBubbleForPlayback
+    // would skip it and lock onto the PREVIOUS turn's bubble.
+    if (turn.assistant) finalizeAssistant();
     turn.speakingBubble = findAssistantBubbleForPlayback();
     turn.speakingWordIdx = 0;
   }
   if (!turn.speakingBubble) return;
+  const pts = Math.max(0, ptsMs ?? 0);
+  // Anchor on the FIRST tts_word event of each playback turn. The server's
+  // pts_ms isn't 0-based — it's session/upstream-relative (~5000 ms for the
+  // first word), so we can't compute target time from playback_start alone.
+  // Instead, when the first word arrives, capture `local_now - pts` as the
+  // offset; every subsequent word in the same turn schedules at offset+pts.
+  if (turn.ttsTimeOffset == null) {
+    turn.ttsTimeOffset = performance.now() - pts;
+  }
   // Capture both the index AND the bubble in the closure so a stale timer
   // from a prior turn never lights up a span in the current one.
   const idx = turn.speakingWordIdx++;
   const bubble = turn.speakingBubble;
-  const localStart = turn.playbackStartLocal ?? performance.now();
-  const targetTime = localStart + Math.max(0, ptsMs ?? 0);
+  const targetTime = turn.ttsTimeOffset + pts;
   const delay = Math.max(0, targetTime - performance.now());
   const id = setTimeout(() => {
     if (!bubble.isConnected) return;
@@ -286,7 +302,7 @@ function endPlaybackHighlight() {
   }
   turn.speakingBubble = null;
   turn.speakingWordIdx = 0;
-  turn.playbackStartLocal = null;
+  turn.ttsTimeOffset = null;
   state.speaking = false;
   updateStatus();
 }
@@ -337,12 +353,25 @@ function handleUpstreamEvent(msg) {
   if (t === 'transcription_start') return;     // Deepgram batch boundary; silent
   if (t === 'user_input_end') return;          // VAD batch boundary, fires repeatedly; silent
   if (t === 'playback_start') {
-    finalizeAssistant();
-    turn.speakingBubble = findAssistantBubbleForPlayback();
-    turn.speakingWordIdx = 0;
-    turn.playbackStartLocal = performance.now();
+    // A new TTS playback is starting. Cancel any pending highlight timers
+    // from the previous playback so they can't fire against the new bubble,
+    // then capture THIS playback's bubble directly (don't search the log —
+    // that picks the wrong bubble when multiple finalized bubbles exist).
     cancelPendingHighlights();
-    state.speaking = true;
+    let activeBubble = null;
+    if (turn.assistant) {
+      activeBubble = turn.assistant;
+      finalizeAssistant();           // splits bubble into word spans
+    } else {
+      // No live bubble (message_complete already finalized it, or playback_start
+      // fired without a prior message_start). Fall back to most recent finalized
+      // assistant bubble.
+      activeBubble = findAssistantBubbleForPlayback();
+    }
+    turn.speakingBubble = activeBubble;
+    turn.speakingWordIdx = 0;
+    turn.ttsTimeOffset = null;        // re-anchor on first tts_word of this playback
+    state.speaking = !!activeBubble;
     updateStatus();
     return;
   }
@@ -402,7 +431,7 @@ function clearLog() {
   turn.assistantText = '';
   turn.speakingBubble = null;
   turn.speakingWordIdx = 0;
-  turn.playbackStartLocal = null;
+  turn.ttsTimeOffset = null;
 }
 
 function cancelPendingHighlights() {

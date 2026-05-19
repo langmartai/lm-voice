@@ -17,7 +17,7 @@ const ALLOWED_ORIGINS = new Set(['https://claude.ai', 'http://localhost']);
  * Text frames carrying { _bridge: ... } are control messages, not relayed.
  */
 class ClaudeAiBridge extends EventEmitter {
-  constructor({ port = DEFAULT_PORT, host = '127.0.0.1', log = () => {}, textBufferSize = 2000, binaryBufferSize = 6000 } = {}) {
+  constructor({ port = DEFAULT_PORT, host = '127.0.0.1', log = () => {}, textBufferSize = 5000, binaryBufferSize = 8000 } = {}) {
     super();
     this.port = port;
     this.host = host;

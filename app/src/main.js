@@ -842,8 +842,11 @@ function openClaudeAiBrowser(navigateTo, tab) {
 }
 
 async function claudeAiBrowserGetUrl() {
-  if (!claudeAiBrowser || claudeAiBrowser.isDestroyed()) return null;
-  try { return claudeAiBrowser.webContents.getURL(); } catch { return null; }
+  // Return the claude.ai BrowserView's URL — that's the user-visible one. The
+  // host BrowserWindow's webContents is just the tab strip shell.
+  const wc = claudeAiViews?.claudeAi?.webContents;
+  if (!wc || wc.isDestroyed()) return null;
+  try { return wc.getURL(); } catch { return null; }
 }
 
 async function claudeAiBrowserGetConvId() {
@@ -2639,16 +2642,17 @@ async function init() {
           if (!claudeAiBridge?.status().pageAttached) {
             return { ok: false, step: 'open-upstream', error: 'page not attached — open the embedded browser first', convId: usedConvId, createdConv, contextResult };
           }
-          // Navigate the claude.ai BrowserView to the conversation page so both
-          // tabs stay in sync. Fire-and-forget — voice WS works regardless of
-          // the embedded page's URL.
-          if (claudeAiViews.claudeAi && !claudeAiViews.claudeAi.webContents.isDestroyed()) {
-            try { claudeAiViews.claudeAi.webContents.loadURL(`https://claude.ai/chat/${usedConvId}`); } catch {}
-          }
+          // Send the upstream-open control message to the current page FIRST.
+          // Then navigate the claude.ai tab to the conversation URL — that
+          // navigation destroys the page snippet and re-injects on the new
+          // page, but the upstream WS is already established and lives in its
+          // own JS heap until close.
           const openMsg = { _bridge: 'open', convId: usedConvId, voice, language };
           if (autoStartMic) openMsg.autoStartMic = true;
           const opened = claudeAiBridge.sendToPageText(JSON.stringify(openMsg));
           if (!opened) return { ok: false, step: 'open-upstream', error: 'send to page failed', convId: usedConvId, createdConv, contextResult };
+          // Skip auto-navigate — it would tear down the page bridge mid-flight.
+          // User can switch tabs manually to see the conversation page.
           return { ok: true, convId: usedConvId, createdConv, contextResult, autoStartMic: !!autoStartMic };
         },
         claudeAiBrowserCreateConversation: async (opts = {}) => createConversationViaBrowser(opts),
@@ -2682,15 +2686,10 @@ async function init() {
           `;
           return claudeAiBrowserExecuteJs(code);
         },
-        claudeAiUpstreamOpen: async ({ convId, orgId, voice, language, timezone, autoStartMic, navigateToConv = true }) => {
+        claudeAiUpstreamOpen: async ({ convId, orgId, voice, language, timezone, autoStartMic }) => {
           if (!claudeAiBridge) return { ok: false, error: 'bridge not running' };
           if (!claudeAiBridge.status().pageAttached) {
             return { ok: false, error: 'page snippet not attached — paste it into a claude.ai devtools console first' };
-          }
-          // Navigate the embedded claude.ai tab to the same conversation so the
-          // two tabs are visually in sync.
-          if (navigateToConv && convId && claudeAiViews.claudeAi && !claudeAiViews.claudeAi.webContents.isDestroyed()) {
-            try { claudeAiViews.claudeAi.webContents.loadURL(`https://claude.ai/chat/${convId}`); } catch {}
           }
           const msg = { _bridge: 'open', convId };
           if (orgId) msg.orgId = orgId;

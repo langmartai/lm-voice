@@ -35,11 +35,12 @@ const state = {
 
 const turn = {
   interim: null,
-  interimSeq: null,
   assistant: null,
   assistantText: '',
   speakingBubble: null,
   speakingWordIdx: 0,
+  playbackStartLocal: null,    // performance.now() when playback_start fired
+  pendingWordTimers: [],       // active setTimeout IDs for scheduled highlights
 };
 
 let placeholderEl = null;
@@ -190,10 +191,9 @@ function ensureInterimBubble() {
 
 function finalizeInterim(finalText) {
   if (!turn.interim) return;
-  if (typeof finalText === 'string') turn.interim.textContent = finalText;
+  if (typeof finalText === 'string' && finalText) turn.interim.textContent = finalText;
   turn.interim.classList.remove('interim');
   turn.interim = null;
-  turn.interimSeq = null;
 }
 
 function ensureAssistantBubble() {
@@ -248,43 +248,45 @@ function findAssistantBubbleForPlayback() {
   return null;
 }
 
-function highlightNextWord(text) {
+// Schedule a word highlight to fire at the server's playback time. tts_word
+// events arrive in bursts well before the audio actually plays — pts_ms tells
+// us when each word is spoken relative to the start of TTS playback. We use
+// performance.now() captured at playback_start as the local audio-clock zero,
+// then setTimeout each highlight to fire at (zero + pts_ms).
+function scheduleWordHighlight(text, ptsMs) {
   if (!turn.speakingBubble) {
     turn.speakingBubble = findAssistantBubbleForPlayback();
     turn.speakingWordIdx = 0;
   }
   if (!turn.speakingBubble) return;
-  const spans = turn.speakingBubble.querySelectorAll('.word');
-  let span = spans[turn.speakingWordIdx];
-  if (span && !wordMatches(span, text)) {
-    for (let off = 1; off <= 3 && turn.speakingWordIdx + off < spans.length; off++) {
-      if (wordMatches(spans[turn.speakingWordIdx + off], text)) {
-        turn.speakingWordIdx += off;
-        span = spans[turn.speakingWordIdx];
-        break;
-      }
+  // Capture both the index AND the bubble in the closure so a stale timer
+  // from a prior turn never lights up a span in the current one.
+  const idx = turn.speakingWordIdx++;
+  const bubble = turn.speakingBubble;
+  const localStart = turn.playbackStartLocal ?? performance.now();
+  const targetTime = localStart + Math.max(0, ptsMs ?? 0);
+  const delay = Math.max(0, targetTime - performance.now());
+  const id = setTimeout(() => {
+    if (!bubble.isConnected) return;
+    const spans = bubble.querySelectorAll('.word');
+    spans.forEach((s) => s.classList.remove('speaking'));
+    const span = spans[idx];
+    if (span) {
+      span.classList.add('speaking');
+      span.scrollIntoView({ block: 'nearest' });
     }
-  }
-  spans.forEach((s) => s.classList.remove('speaking'));
-  if (span) {
-    span.classList.add('speaking');
-    span.scrollIntoView({ block: 'nearest' });
-    turn.speakingWordIdx++;
-  }
-}
-
-function wordMatches(span, target) {
-  const a = (span.textContent || '').replace(/[^a-z0-9']/gi, '').toLowerCase();
-  const b = (target || '').replace(/[^a-z0-9']/gi, '').toLowerCase();
-  return a && b && a === b;
+  }, delay);
+  turn.pendingWordTimers.push(id);
 }
 
 function endPlaybackHighlight() {
+  cancelPendingHighlights();
   if (turn.speakingBubble) {
     turn.speakingBubble.querySelectorAll('.word.speaking').forEach((s) => s.classList.remove('speaking'));
   }
   turn.speakingBubble = null;
   turn.speakingWordIdx = 0;
+  turn.playbackStartLocal = null;
   state.speaking = false;
   updateStatus();
 }
@@ -294,7 +296,10 @@ function handleSseInner(inner) {
   if (!t) return;
   const data = inner.data || {};
   if (t === 'conversation_ready') lifecyclePulse('— conversation ready —');
-  else if (t === 'message_start') ensureAssistantBubble();
+  else if (t === 'message_start') {
+    finalizeInterim();           // lock the user transcript before assistant starts
+    ensureAssistantBubble();
+  }
   else if (t === 'content_block_delta') appendAssistantDelta(data?.delta?.text || '');
 }
 
@@ -313,33 +318,43 @@ function handleUpstreamEvent(msg) {
   if (!t) return;
 
   if (t === 'message_sse' && msg.event) { handleSseInner(msg.event); return; }
+
+  // transcript_interim carries the FULL cumulative transcript for the current
+  // user utterance. utterance_seq resets are internal Deepgram batch
+  // boundaries, NOT new user turns — always update the same bubble. It
+  // finalizes when (a) the human history-record arrives with canonical text,
+  // or (b) message_start fires (assistant begins replying).
   if (t === 'transcript_interim' && typeof msg.text === 'string') {
     const b = ensureInterimBubble();
-    if (typeof msg.utterance_seq === 'number' && turn.interimSeq != null && msg.utterance_seq < turn.interimSeq) {
-      finalizeInterim();
-      ensureInterimBubble();
-    }
-    turn.interimSeq = msg.utterance_seq ?? turn.interimSeq;
     b.textContent = msg.text;
     scrollToBottom();
     return;
   }
   if (t === 'transcript_empty') {
-    if (turn.interim) { turn.interim.remove(); turn.interim = null; turn.interimSeq = null; }
+    if (turn.interim) { turn.interim.remove(); turn.interim = null; }
     return;
   }
+  if (t === 'transcription_start') return;     // Deepgram batch boundary; silent
+  if (t === 'user_input_end') return;          // VAD batch boundary, fires repeatedly; silent
   if (t === 'playback_start') {
     finalizeAssistant();
     turn.speakingBubble = findAssistantBubbleForPlayback();
     turn.speakingWordIdx = 0;
+    turn.playbackStartLocal = performance.now();
+    cancelPendingHighlights();
     state.speaking = true;
     updateStatus();
     return;
   }
   if (t === 'playback_end') { endPlaybackHighlight(); return; }
-  if (t === 'tts_word') { if (typeof msg.text === 'string') highlightNextWord(msg.text); return; }
+  if (t === 'tts_word') {
+    if (typeof msg.text === 'string') scheduleWordHighlight(msg.text, msg.pts_ms);
+    return;
+  }
+  if (t === 'tts_segment_end') return;
   if (t === 'server_interrupt') { endPlaybackHighlight(); return; }
   if (t === 'message_complete') { finalizeAssistant(); return; }
+  if (t === 'session_server_initialized') return;
   if (t === 'error') { addRow('error', JSON.stringify(msg)); return; }
 }
 
@@ -381,12 +396,18 @@ async function api(path, opts = {}) {
 function clearLog() {
   els.log.innerHTML = '';
   placeholderEl = null;
+  cancelPendingHighlights();
   turn.interim = null;
-  turn.interimSeq = null;
   turn.assistant = null;
   turn.assistantText = '';
   turn.speakingBubble = null;
   turn.speakingWordIdx = 0;
+  turn.playbackStartLocal = null;
+}
+
+function cancelPendingHighlights() {
+  for (const id of turn.pendingWordTimers) clearTimeout(id);
+  turn.pendingWordTimers.length = 0;
 }
 
 async function startNewSession() {

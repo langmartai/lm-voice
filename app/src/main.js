@@ -745,6 +745,11 @@ function switchClaudeAiTab(name) {
   claudeAiBrowser.addBrowserView(target);
   claudeAiViews.active = (name === 'conversation') ? 'conversation' : 'claude-ai';
   layoutClaudeAiViews();
+  // Move keyboard focus onto the newly-active BrowserView's webContents so
+  // its document-level keydown listeners (Space/Enter/Esc in the conversation
+  // renderer) actually fire. Without this, the host shell keeps focus after
+  // a tab-strip click and the renderer never sees the keypress.
+  try { target.webContents.focus(); } catch {}
   try {
     claudeAiBrowser.webContents.send('claude-ai-browser:tab-state', { active: claudeAiViews.active });
   } catch {}

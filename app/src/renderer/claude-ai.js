@@ -29,8 +29,6 @@ const state = {
   upstreamOpen: false,
   micRunning: false,
   speaking: false,
-  pcmCtx: null,
-  pcmNextStart: 0,
 };
 
 const turn = {
@@ -150,9 +148,10 @@ function handleBridgeMessage(data) {
     if (msg) { logRawEvent(msg); handleUpstreamEvent(msg); return; }
     return;
   }
-  // Binary frame = server PCM. The embedded browser plays it natively; we
-  // queue here too so this UI surface stays usable on its own.
-  playPcm(data);
+  // Binary PCM frames are played by the embedded claude.ai BrowserView (the
+  // page snippet's playPcm16). The renderer ignores them — playing here too
+  // would produce double audio AND the page-side AudioContext.suspend() on
+  // pause wouldn't silence the renderer's separate AudioContext.
 }
 
 function handleBridgeControl(msg) {
@@ -443,27 +442,6 @@ function handleUpstreamEvent(msg) {
   if (t === 'message_complete') { finalizeAssistant(); return; }
   if (t === 'session_server_initialized') return;
   if (t === 'error') { addRow('error', JSON.stringify(msg)); return; }
-}
-
-// --- PCM playback (best effort — embedded browser already plays it) ----------
-
-function playPcm(arrayBuffer) {
-  if (!state.pcmCtx) {
-    state.pcmCtx = new AudioContext({ sampleRate: 16000 });
-    state.pcmNextStart = state.pcmCtx.currentTime;
-  }
-  const view = new DataView(arrayBuffer);
-  const samples = arrayBuffer.byteLength >>> 1;
-  if (!samples) return;
-  const buf = state.pcmCtx.createBuffer(1, samples, 16000);
-  const ch = buf.getChannelData(0);
-  for (let i = 0; i < samples; i++) ch[i] = view.getInt16(i * 2, true) / 0x8000;
-  const src = state.pcmCtx.createBufferSource();
-  src.buffer = buf;
-  src.connect(state.pcmCtx.destination);
-  const start = Math.max(state.pcmNextStart, state.pcmCtx.currentTime);
-  src.start(start);
-  state.pcmNextStart = start + buf.duration;
 }
 
 // --- API helpers (the renderer talks directly to lm-voice's local HTTP API) -

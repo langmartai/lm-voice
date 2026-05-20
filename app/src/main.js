@@ -2739,6 +2739,49 @@ async function init() {
           return { ok: true };
         },
         claudeAiBrowserSendCompletion: async (opts = {}) => sendCompletionViaBrowser(opts),
+        claudeAiVoiceSpeakAsUser: async ({ text, voiceStyle } = {}) => {
+          // Phase B: synthesize text → 16 kHz mono PCM → bridge → page snippet
+          // → page encodes to Opus and feeds it into the same upstream WS path
+          // the mic uses, so the server transcribes our injected audio as if
+          // the user had spoken it. Used by the Phase C monitor to bridge
+          // text-mode capabilities into the voice-mode conversation.
+          if (typeof text !== 'string' || !text.trim()) {
+            return { ok: false, error: 'text is required' };
+          }
+          if (!claudeAiBridge || !claudeAiBridge.status().pageAttached) {
+            return { ok: false, error: 'page not attached' };
+          }
+          if (!claudeAiBridge.status().upstreamOpen) {
+            return { ok: false, error: 'voice WS not open — start a voice session first' };
+          }
+          // Lazily build / cache the TTS instance.
+          if (!tts) {
+            tts = new SupertonicTTS({ voiceStyle: voiceStyle || config.tts?.voiceStyle || 'M1', speed: config.tts?.speed || 1.05 });
+          }
+          let wavBuf;
+          try {
+            wavBuf = await tts.synthesizeWav(text);
+          } catch (e) {
+            return { ok: false, step: 'tts', error: e.message };
+          }
+          // Down-sample to 16 kHz Int16 PCM mono.
+          let pcm16;
+          try {
+            pcm16 = wavTo16kMonoPcm(wavBuf);
+          } catch (e) {
+            return { ok: false, step: 'resample', error: e.message };
+          }
+          // Send to the page as base64 — small enough over a localhost WS.
+          const msg = {
+            _bridge: 'speak_as_user',
+            sampleRate: 16000,
+            pcm16B64: pcm16.toString('base64'),
+            sampleCount: pcm16.length >>> 1,
+          };
+          const sent = claudeAiBridge.sendToPageText(JSON.stringify(msg));
+          if (!sent) return { ok: false, error: 'send to page failed' };
+          return { ok: true, sampleCount: msg.sampleCount, durationMs: Math.round(msg.sampleCount / 16) };
+        },
         claudeAiVoiceInjectText: async ({ text, convId } = {}) => {
           // Send a text message into the conversation currently bound to the
           // open voice WS. We POST it via claude.ai's normal /completion

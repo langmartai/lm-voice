@@ -187,6 +187,84 @@
     return { ok: true };
   };
 
+  // Inject synthesized PCM as if the user had spoken it. Pauses the real mic,
+  // runs the PCM through a fresh AudioEncoder(opus) to produce wire-compatible
+  // Opus packets, sends them to the upstream voice WS, then resumes the mic.
+  // The server transcribes our injected audio just like real speech.
+  const speakAsUser = async (msg) => {
+    if (!state.upstream || state.upstream.readyState !== 1) {
+      sendLocal(JSON.stringify({ _bridge: 'speak_as_user_error', message: 'upstream not open' }));
+      return;
+    }
+    if (!window.AudioEncoder || !window.AudioData) {
+      sendLocal(JSON.stringify({ _bridge: 'speak_as_user_error', message: 'WebCodecs unavailable' }));
+      return;
+    }
+    const sampleRate = msg.sampleRate || 16000;
+    // Decode base64 → Int16 → Float32 in [-1, 1]
+    const binStr = atob(msg.pcm16B64 || '');
+    const i16 = new Int16Array(binStr.length / 2);
+    for (let i = 0; i < i16.length; i++) {
+      const lo = binStr.charCodeAt(i * 2);
+      const hi = binStr.charCodeAt(i * 2 + 1);
+      i16[i] = (hi << 8) | lo;
+      if (i16[i] & 0x8000) i16[i] |= ~0xffff;
+    }
+    const f32 = new Float32Array(i16.length);
+    for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 0x8000;
+
+    // Pause the real mic so its frames don't interleave with synth frames
+    // (different timestamps + samples confuse the encoder/server).
+    const micWasRunning = state.mic.running;
+    if (micWasRunning) await stopMic({ silent: true });
+
+    sendLocal(JSON.stringify({ _bridge: 'speak_as_user_started', samples: f32.length, durationMs: Math.round(f32.length * 1000 / sampleRate) }));
+
+    let encOut = 0;
+    const upstream = state.upstream;
+    const enc = new AudioEncoder({
+      output: (chunk) => {
+        if (!upstream || upstream.readyState !== 1) return;
+        const ob = new ArrayBuffer(chunk.byteLength);
+        chunk.copyTo(ob);
+        try { upstream.send(ob); encOut += ob.byteLength; } catch {}
+      },
+      error: (e) => {
+        sendLocal(JSON.stringify({ _bridge: 'speak_as_user_error', message: 'encoder: ' + String(e.message || e) }));
+      },
+    });
+    try {
+      enc.configure({ codec: 'opus', sampleRate, numberOfChannels: 1, bitrate: 24000 });
+      // Encoder needs reasonably-sized AudioData blocks. Chunk into 20 ms.
+      const samplesPerChunk = Math.floor(sampleRate * 0.02);   // 320 @ 16 kHz
+      let ts = 0;
+      for (let off = 0; off < f32.length; off += samplesPerChunk) {
+        const slice = f32.subarray(off, Math.min(f32.length, off + samplesPerChunk));
+        // AudioData wants its own backing buffer.
+        const copy = new Float32Array(slice.length);
+        copy.set(slice);
+        const ad = new AudioData({
+          format: 'f32-planar',
+          sampleRate,
+          numberOfFrames: copy.length,
+          numberOfChannels: 1,
+          timestamp: ts,
+          data: copy,
+        });
+        ts += Math.round((copy.length / sampleRate) * 1e6);
+        if (enc.state === 'configured') enc.encode(ad);
+        ad.close();
+      }
+      await enc.flush();
+    } finally {
+      try { enc.close(); } catch {}
+    }
+    sendLocal(JSON.stringify({ _bridge: 'speak_as_user_done', encodedBytes: encOut }));
+    if (micWasRunning) {
+      try { await startMic(); } catch (e) { sendLocal(JSON.stringify({ _bridge: 'mic_error', message: 'restart after synth: ' + String(e.message || e) })); }
+    }
+  };
+
   const handleLocalControl = (msg) => {
     if (msg._bridge === 'open') {
       try {
@@ -227,6 +305,10 @@
       startMic();
     } else if (msg._bridge === 'mic_stop') {
       stopMic();
+    } else if (msg._bridge === 'speak_as_user') {
+      speakAsUser(msg).catch((e) => {
+        sendLocal(JSON.stringify({ _bridge: 'speak_as_user_error', message: String(e.message || e) }));
+      });
     } else if (msg._bridge === 'playback_set') {
       playback.enabled = !!msg.enabled;
       sendLocal(JSON.stringify({ _bridge: 'playback_state', enabled: playback.enabled }));

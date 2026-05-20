@@ -17,6 +17,8 @@ const els = {
   picker:       document.getElementById('picker'),
   pickerBody:   document.getElementById('picker-body'),
   pickerClose:  document.getElementById('picker-close'),
+  composerInput: document.getElementById('composer-input'),
+  composerSend:  document.getElementById('composer-send'),
 };
 
 const API_BASE = 'http://127.0.0.1:3199';
@@ -80,6 +82,10 @@ function updateStatus() {
   els.btnNew.disabled = !canStart;
   els.btnSwitch.disabled = !canStart;
   els.btnStop.disabled = !state.upstreamOpen;
+  // Composer enabled only when a voice session is open.
+  const canInject = state.upstreamOpen;
+  els.composerInput.disabled = !canInject;
+  els.composerSend.disabled = !canInject;
 }
 
 function ensurePlaceholder() {
@@ -610,6 +616,39 @@ async function pickConversation(convId) {
 els.btnNew.addEventListener('click', () => startNewSession());
 els.btnSwitch.addEventListener('click', () => openPicker());
 els.btnStop.addEventListener('click', () => stopSession());
+
+async function injectComposerText() {
+  const text = els.composerInput.value.trim();
+  if (!text) return;
+  els.composerInput.disabled = true;
+  els.composerSend.disabled = true;
+  // Optimistically show the user's text in the log so they get immediate
+  // feedback. The voice-WS history record (if relayed) will arrive later.
+  addRow('user', text);
+  els.composerInput.value = '';
+  try {
+    const r = await api('/api/claude-ai/voice/inject-text', {
+      method: 'POST',
+      body: { text },
+    });
+    if (!r?.ok) addRow('error', `Inject failed: ${r?.error || r?.body || JSON.stringify(r)}`);
+    else if (r?.text) addRow('assistant', r.text);
+  } catch (e) {
+    addRow('error', `Inject failed: ${e.message}`);
+  } finally {
+    updateStatus();
+    els.composerInput.focus();
+  }
+}
+
+els.composerSend.addEventListener('click', injectComposerText);
+els.composerInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    e.stopPropagation();
+    injectComposerText();
+  }
+});
 
 function sendBridge(obj) {
   if (state.bridge && state.bridge.readyState === 1) {

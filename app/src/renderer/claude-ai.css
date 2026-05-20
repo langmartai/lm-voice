@@ -208,6 +208,41 @@ html, body { margin: 0; padding: 0; height: 100%; background: #0f1219; color: #e
   color: #4a8eff;
 }
 
+/* --- Composer for injecting text into the voice conversation --- */
+#composer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: #14171f;
+  border-top: 1px solid #2a2f3b;
+}
+#composer-input {
+  flex: 1 1 auto;
+  background: #1d212c;
+  border: 1px solid #2a2f3b;
+  color: #e7e9ee;
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+}
+#composer-input:focus { border-color: rgba(118, 156, 255, 0.6); }
+#composer-input:disabled { opacity: 0.4; cursor: default; }
+#composer-send {
+  background: #2a4870;
+  color: #d8e1ff;
+  border: 1px solid #2a4870;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+#composer-send:hover:not(:disabled) { background: #355a8a; }
+#composer-send:disabled { opacity: 0.4; cursor: default; }
+
 /* --- Debug panel (collapsed by default) --- */
 #debug-panel {
   flex: 0 0 auto;

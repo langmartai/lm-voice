@@ -2707,6 +2707,21 @@ async function init() {
           return { ok: true };
         },
         claudeAiBrowserSendCompletion: async (opts = {}) => sendCompletionViaBrowser(opts),
+        claudeAiVoiceInjectText: async ({ text, convId } = {}) => {
+          // Send a text message into the conversation currently bound to the
+          // open voice WS. We POST it via claude.ai's normal /completion
+          // endpoint from the embedded browser. The voice WS may or may not
+          // relay the new turn's message_sse events — that's the open
+          // experiment.
+          if (typeof text !== 'string' || !text.trim()) {
+            return { ok: false, error: 'text is required' };
+          }
+          const useConv = convId || claudeAiBridge?.status().lastConvId;
+          if (!useConv) {
+            return { ok: false, error: 'no active voice conversation — pass convId explicitly or start a session first' };
+          }
+          return sendCompletionViaBrowser({ convId: useConv, prompt: text });
+        },
         claudeAiSessionStart: async ({ convId, context, contextModel, name, voice = 'airy', language = 'en-US', autoStartMic = true } = {}) => {
           let usedConvId = convId;
           let createdConv = null;

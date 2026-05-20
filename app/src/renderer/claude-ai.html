@@ -31,6 +31,11 @@
 
     <div id="log" aria-live="polite"></div>
 
+    <div id="composer">
+      <input id="composer-input" type="text" placeholder="Type to inject text into the voice conversation… (Enter to send)" autocomplete="off" spellcheck="false" />
+      <button id="composer-send" title="Send text (Enter)">↑</button>
+    </div>
+
     <div id="debug-panel" class="hidden">
       <div class="debug-head">raw server events <button id="clear-events">clear</button></div>
       <pre id="events"></pre>

@@ -354,7 +354,7 @@
     ws.binaryType = 'arraybuffer';
     ws.onopen = () => {
       console.info('[lm-voice-bridge] upstream connected', url);
-      sendLocal(JSON.stringify({ _bridge: 'upstream_open', url }));
+      sendLocal(JSON.stringify({ _bridge: 'upstream_open', url, convId: state.convId, orgId: state.orgId }));
       if (opts.autoStartMic) {
         startMic().then((r) => {
           if (!r?.ok) sendLocal(JSON.stringify({ _bridge: 'mic_error', message: r?.error || 'auto-start failed' }));

@@ -942,6 +942,38 @@ async function launchClaudeAiConversation() {
   return { ok: true, convId: c.uuid };
 }
 
+async function fetchConversationViaBrowser({ convId, tree = true, renderingMode = 'messages' } = {}) {
+  if (!convId) return { ok: false, error: 'convId is required' };
+  const safeUuid = String(convId).replace(/[^a-f0-9-]/gi, '');
+  const code = `
+    (async () => {
+      const orgMatch = document.cookie.match(/lastActiveOrg=([^;]+)/);
+      if (!orgMatch) return { ok: false, error: 'not logged in' };
+      const org = decodeURIComponent(orgMatch[1]);
+      const cookies = Object.fromEntries(document.cookie.split(';').map(p => {
+        const i = p.indexOf('='); return [p.slice(0, i).trim(), p.slice(i + 1).trim()];
+      }));
+      const headers = {
+        'anthropic-client-platform': 'web_claude_ai',
+        'anthropic-client-version': '1.0.0',
+        'anthropic-client-sha':      '8a753cbf88e19be0f5f67efefb1b07840b6402e9',
+        'Accept': '*/*',
+      };
+      if (cookies['anthropic-device-id']) headers['anthropic-device-id']    = cookies['anthropic-device-id'];
+      if (cookies['ajs_anonymous_id'])    headers['anthropic-anonymous-id'] = cookies['ajs_anonymous_id'];
+      if (cookies['activitySessionId'])   headers['x-activity-session-id']  = cookies['activitySessionId'];
+      const url = \`/api/organizations/\${org}/chat_conversations/${safeUuid}?tree=${tree ? 'true' : 'false'}&rendering_mode=${renderingMode}&render_all_tools=true\`;
+      try {
+        const r = await fetch(url, { credentials: 'include', headers });
+        const t = await r.text();
+        let body; try { body = JSON.parse(t); } catch { body = t; }
+        return { ok: r.ok, status: r.status, conversation: body };
+      } catch (e) { return { ok: false, error: String(e.message || e) }; }
+    })()
+  `;
+  return claudeAiBrowserExecuteJs(code);
+}
+
 async function deleteConversationViaBrowser({ convId } = {}) {
   if (!convId) return { ok: false, error: 'convId is required' };
   const safeUuid = String(convId).replace(/[^a-f0-9-]/gi, '');
@@ -2756,6 +2788,11 @@ async function init() {
         },
         claudeAiBrowserCreateConversation: async (opts = {}) => createConversationViaBrowser(opts),
         claudeAiBrowserDeleteConversation: async (opts = {}) => deleteConversationViaBrowser(opts),
+        claudeAiBrowserFetchConversation: async (opts = {}) => fetchConversationViaBrowser(opts),
+        claudeAiBrowserExec: async ({ js } = {}) => {
+          if (typeof js !== 'string' || !js.length) return { ok: false, error: 'js is required' };
+          return claudeAiBrowserExecuteJs(js);
+        },
         claudeAiBrowserListConversations: async ({ limit = 20 } = {}) => {
           const lim = Math.max(1, Math.min(100, Number(limit) || 20));
           const code = `

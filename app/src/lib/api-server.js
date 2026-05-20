@@ -172,6 +172,11 @@ class VoiceApiServer {
         const result = await this.handlers.claudeAiBrowserSendCompletion(body || {});
         return sendJson(res, result?.ok ? 200 : (result?.status || 500), result);
       }
+      if (req.method === 'POST' && p === '/api/claude-ai/browser/exec') {
+        const body = await readJson(req);
+        const result = await this.handlers.claudeAiBrowserExec(body || {});
+        return sendJson(res, 200, result);
+      }
       if (req.method === 'POST' && p === '/api/claude-ai/voice/inject-text') {
         const body = await readJson(req);
         const result = await this.handlers.claudeAiVoiceInjectText(body || {});

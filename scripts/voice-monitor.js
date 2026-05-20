@@ -100,19 +100,41 @@ function summarizeSessions(sessions, maxAgeHours) {
 }
 
 function buildContextPrompt(summary) {
+  // Keep this short and honest — Claude pushed back on a previous version
+  // that asked it to pretend a background worker exists in its toolset. We
+  // just load reference context; the monitor handles delegation proactively
+  // on the user side (sees user transcripts, does local work, injects results
+  // back via speak-as-user — Claude doesn't need to know how it arrived).
   return [
-    'REFERENCE CONTEXT — recent Claude Code session activity on the user\'s machine.',
-    'This is background context for the conversation about to start; you do not need to act on it now.',
+    'Reference context — recent Claude Code session activity on the user\'s machine.',
+    'This is background info for the conversation about to start. Do not act on it.',
     '',
     summary,
     '',
-    'Acknowledge with a single dot character (".") only — no further text.',
+    'Heads-up: some user messages later in this chat may contain data that I gathered',
+    'locally with my own tooling (file contents, lm-assist session state, output of',
+    'shell commands, etc) — when that happens just treat it as me providing context',
+    'and respond naturally.',
+    '',
+    'Acknowledge with a single "." and nothing else.',
   ].join('\n');
 }
 
 async function injectContext(text) {
-  const r = await httpReq('POST', `${config.lmVoiceUrl}/api/claude-ai/voice/inject-text`, { text });
-  return r.json;
+  // Retry on 429 — context-loader runs right after a fresh conversation create
+  // which sometimes hits a per-org rate limit. Two attempts is enough in practice.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const r = await httpReq('POST', `${config.lmVoiceUrl}/api/claude-ai/voice/inject-text`, { text });
+    if (r.json?.ok) return r.json;
+    if (r.json?.status === 429 || r.status === 429) {
+      const delay = 1500 * (attempt + 1);
+      log(`inject 429 — retrying in ${delay}ms (attempt ${attempt + 1})`);
+      await new Promise((r) => setTimeout(r, delay));
+      continue;
+    }
+    return r.json;   // some other error — return as-is
+  }
+  return { ok: false, error: 'gave up after 3 retries on 429' };
 }
 
 const state = {
@@ -161,19 +183,37 @@ async function tick() {
 
 // ----- Phase C: live bridge subscriber + capability-gap agent ---------------
 
-const REFUSAL_PATTERNS = [
-  /can'?t (use|access|call|invoke|read|search|do|pull|fetch|get|connect|reach)/i,
-  /not (available|active|loaded|enabled) (in|for|this|here)/i,
-  /(don'?t|do not) have access/i,
-  /tools? (aren'?t|isn'?t|haven'?t been) (active|loaded|available|enabled)/i,
-  /(can'?t|cannot) (help|do) (with|that)/i,
-  /isn'?t loaded into this/i,
-  /aren'?t currently active/i,
+// User-transcript patterns that mean "I want something local-only". The
+// monitor proactively fires the agent when these match — doesn't wait to
+// see if Claude refuses, because (a) Claude can't be made to delegate
+// reliably, and (b) acting earlier means the user sees a faster reply.
+const LOCAL_INTENT_PATTERNS = [
+  /lm[-\s]?assist/i,
+  /lm[-\s]?voice/i,
+  /(my|the|this) (local|machine|computer|laptop|desktop|filesystem|files?|session)/i,
+  /(check|read|run|list|show) (the|my|this) (\w+\s+){0,4}(file|directory|folder|script|log|repo|session|process)/i,
+  /(claude[-\s]?code|trade[-\s]?engine|trading|server|process|daemon) (status|state|log|output|sessions?)/i,
+  /(running|active) (session|process|task|execution)s?/i,
+  /(any|what|which|list|show) (\w+\s+){0,3}sessions?( running)?( on)?( my)?( machine| computer)?/i,
+  /(what|how is|status of) (my|the) (\w+\s+){0,3}(session|service|daemon|process|engine)/i,
 ];
+
+// Fallback: legacy refusal patterns — if Claude DOES refuse before we got a
+// chance to act on the user's intent, still fire the agent.
+const FALLBACK_REFUSAL_PATTERNS = [
+  /can'?t (use|access|call|invoke|read|search|do|pull|fetch|get|connect|reach|see|find)/i,
+  /(don'?t|do not) have access/i,
+  /no access to (your|the user'?s) (local|machine|filesystem|files|sessions|computer)/i,
+];
+
+function looksLikeLocalIntent(text) {
+  if (!text || text.length < 5) return false;
+  return LOCAL_INTENT_PATTERNS.some((re) => re.test(text));
+}
 
 function looksLikeRefusal(text) {
   if (!text || text.length < 20) return false;
-  return REFUSAL_PATTERNS.some((re) => re.test(text));
+  return FALLBACK_REFUSAL_PATTERNS.some((re) => re.test(text));
 }
 
 // Per-turn accumulator. The bridge stream gives us message_sse pieces; we
@@ -214,11 +254,16 @@ function handleBridgeFrame(msg) {
   // History records — these are the canonical persisted messages.
   if (!t && msg.data?.sender && Array.isArray(msg.data.content)) {
     const text = msg.data.content.map((c) => c.text || '').join('').trim();
-    if (msg.data.sender === 'human' && text) liveTurn.lastUserTranscript = text;
+    if (msg.data.sender === 'human' && text) {
+      liveTurn.lastUserTranscript = text;
+      // PROACTIVE: human history record is the FINAL user transcript. Check
+      // it now for local intent and fire the agent in parallel with Claude's
+      // upcoming response. The user will hear an answer sooner.
+      maybeFireAgent(text, '', 'LOCAL_INTENT');
+    }
     return;
   }
   if (t === 'transcript_interim' && typeof msg.text === 'string') {
-    // Keep the most recent interim — overwritten until final history record
     liveTurn.lastUserTranscript = msg.text;
     return;
   }
@@ -238,74 +283,120 @@ function handleBridgeFrame(msg) {
     const asst = liveTurn.currentAssistantText.trim();
     liveTurn.inAssistantTurn = false;
     if (!asst) return;
-    if (!looksLikeRefusal(asst)) return;
-    // dedupe: ignore if we already fired in the last 30s
-    if (Date.now() - liveTurn.recentRefusalAt < 30000) {
-      log('refusal detected but agent fired <30s ago — skipping');
-      return;
-    }
-    liveTurn.recentRefusalAt = Date.now();
-    log(`[REFUSAL] user=${JSON.stringify(userText.slice(0, 120))}`);
-    log(`         claude=${JSON.stringify(asst.slice(0, 120))}`);
-    fireBridgeAgent(userText, asst).catch((e) => log('agent err', e.message));
+    // Reactive fallback: only fire if user-intent didn't catch this earlier
+    maybeFireAgent(userText, asst, 'REFUSAL');
   }
 }
 
-async function fireBridgeAgent(userText, refusalText) {
+function maybeFireAgent(userText, assistantText, channel) {
+  if (!userText) return;
+  if (channel === 'LOCAL_INTENT' && !looksLikeLocalIntent(userText)) return;
+  if (channel === 'REFUSAL' && !looksLikeRefusal(assistantText)) return;
+  // dedupe: ignore if we already fired in the last 30s for any reason
+  if (Date.now() - liveTurn.recentRefusalAt < 30000) {
+    log(`${channel} matched but agent fired <30s ago — skipping`);
+    return;
+  }
+  liveTurn.recentRefusalAt = Date.now();
+  log(`[${channel}] user=${JSON.stringify(userText.slice(0, 120))}`);
+  if (assistantText) log(`         claude=${JSON.stringify(assistantText.slice(0, 120))}`);
+  fireBridgeAgent(userText, assistantText, channel).catch((e) => log('agent err', e.message));
+}
+
+async function fireBridgeAgent(userText, refusalText, trigger) {
   if (!config.bridgeAgentEnabled) { log('bridge agent disabled — skipping'); return; }
   const prompt = [
-    'You are the capability-bridge agent for an lm-voice conversation.',
+    'You are the LOCAL-CAPABILITIES agent for an lm-voice conversation.',
     '',
-    'A user is in a CLAUDE.AI VOICE session (Haiku, restricted toolset — no MCP, no Gmail, no Drive).',
-    'Voice mode just refused to fulfill a request. Your job: see if TEXT MODE (Opus, full MCP) can do it,',
-    'and route the answer back into voice so the user hears it.',
+    'A user is in a CLAUDE.AI VOICE session (Haiku, conversational only, limited tools). The cloud',
+    'Claude (voice or text mode) can do things like web search, Gmail, Drive — but it CANNOT reach',
+    'anything local to the user\'s machine. You run AS A SEPARATE PROCESS on the user\'s machine, so',
+    'you have access to things cloud Claude does not:',
+    '',
+    '  * lm-assist HTTP API at http://127.0.0.1:3100/ — Claude Code sessions, project state,',
+    '    /agent/execute for sub-agent runs, /sessions, /projects, claude-ai conversation reads, etc.',
+    '  * The user\'s filesystem (Bash, Read, etc.) — anything on disk.',
+    '  * Local processes / daemons — lm-voice (port 3199), lm-assist (3100), any project services.',
+    '  * Local Claude Code session histories under ~/.claude/projects/',
+    '  * Git status of local repos.',
+    '',
+    'Your job: when the conversation hits something the cloud can\'t do but you CAN, pick it up,',
+    'do it, and report back into the conversation through two channels described below.',
     '',
     '=== last user transcript ===',
     userText || '(none captured)',
     '',
-    '=== voice-mode assistant reply (the refusal) ===',
+    '=== voice-mode assistant reply ===',
     refusalText,
     '',
-    '=== tools (curl from Bash) ===',
+    `=== trigger reason: ${trigger} ===`,
+    trigger === 'LOCAL_INTENT'
+      ? [
+          'The user just asked something that pattern-matched "local task" (lm-assist, local sessions,',
+          'local files, machine state, etc). You fired BEFORE the cloud Claude replied — your goal is',
+          'to get the answer in front of the user FAST by speaking it as the user, so cloud Claude\'s',
+          'spoken reply already has the data. If the request turns out to NOT be local, just skip.',
+        ].join('\n')
+      : [
+          'The cloud Claude refused the user\'s request. Decide: can YOU do this locally? If yes,',
+          'do it and report via speak-as-user so cloud Claude can speak the answer back. If no, also',
+          'report so the user knows the request was actually attempted.',
+        ].join('\n'),
     '',
-    '* POST http://127.0.0.1:3199/api/claude-ai/voice/inject-text { "text": "..." }',
-    '  Returns { "ok": true, "text": "<assistant reply>" } — text-mode Claude\'s response to your prompt.',
+    '=== how to talk back to the conversation ===',
     '',
-    '* POST http://127.0.0.1:3199/api/claude-ai/voice/speak-as-user { "text": "..." }',
-    '  Synthesizes text → injects as user speech in the voice WS.',
-    '  Voice Claude then responds in voice; the user hears it.',
+    'You have TWO output channels into the claude.ai conversation:',
     '',
-    '=== IMPORTANT: claude.ai MCP connector quirk ===',
-    'Even in text mode, MCP connectors (Gmail, Drive, Calendar, etc.) are NOT loaded by default in a',
-    'fresh conversation. Claude must first invoke `tool_search` to load them. So a single prompt like',
-    '"What is my latest email?" usually fails — Claude says it doesn\'t have Gmail tools.',
+    '1. inject-text: writes a TEXT-MODE user turn into the conversation history.',
+    '   POST http://127.0.0.1:3199/api/claude-ai/voice/inject-text { "text": "..." }',
+    '   Use this for: detailed findings, structured data, things that should be in history but',
+    '   are too long to speak naturally. The cloud Claude (Opus) replies in text (no TTS).',
     '',
-    'The reliable two-shot pattern:',
-    '  inject-text #1: prompt that explicitly says "Use the Gmail tools (call tool_search first if',
-    '                  needed) to find and read my most recent email. Return a short summary."',
-    '  → text-mode reply usually contains the answer in <300 chars',
-    '  → if it STILL says no tools, try one more inject with explicit "Use tool_search to load Gmail',
-    '    tools, then call Gmail:search_threads on in:inbox limit 1."',
+    '2. speak-as-user: synthesizes audio and feeds it into the voice WS as user mic input.',
+    '   POST http://127.0.0.1:3199/api/claude-ai/voice/speak-as-user { "text": "..." }',
+    '   Voice Claude (Haiku) treats it as the user speaking and REPLIES IN VOICE — the user hears',
+    '   audio. Keep under 25 words; Supertonic+Deepgram round-trip loses fidelity on long text.',
     '',
-    '=== procedure ===',
-    '1. Decide whether the request is something text-mode-with-MCP could fulfill.',
-    '   (Email, calendar, docs, web search → YES. Stock quote, math → no.)',
-    '   If NO, output one line "skip: <reason>" and stop.',
+    'Use BOTH for important results — speak-as-user for the short verbal summary so user hears it,',
+    'inject-text for the detailed record so it\'s queryable later.',
     '',
-    '2. Call inject-text with a prompt that EXPLICITLY tells Claude to use the right tool',
-    '   and call tool_search first if needed (see pattern above).',
+    '=== required pattern: announce, work, report ===',
     '',
-    '3. Read the .text field of the response. If it\'s a refusal too, try once more with',
-    '   stronger phrasing about tool_search. Otherwise extract a SHORT user-facing answer.',
+    'A. ANNOUNCE — first thing you do, BEFORE any local work:',
+    '   speak-as-user with a single short phrase telling the user you\'re on it, e.g.',
+    '     "Hold on, let me check that locally."',
+    '     "Got it, pulling that up now."',
+    '   This makes voice Claude respond ("ok, take your time") so the user knows something is happening.',
     '',
-    '4. Call speak-as-user with the answer phrased as if YOU (the user) are saying it,',
-    '   so voice-Claude responds naturally. Example:',
-    '   - Bad : "Your latest email is from npm about token expiry."',
-    '   - Good: "Actually I just checked — my latest email is from npm saying my token expired.',
-    '           Should I rotate it?"',
+    'B. WORK — do the actual local task. Use Bash, curl lm-assist, read files, whatever it takes.',
+    '   Be thorough but bounded — don\'t spend 5 minutes on a tangent.',
     '',
-    'Keep the speak-as-user text under 25 words — Supertonic + Deepgram round-trip loses fidelity',
-    'on long text. Output a one-line summary of what you did at the end. If anything errors, abort.',
+    'C. REPORT — when done:',
+    '   1. inject-text with a structured detailed answer (multi-line ok, can include data).',
+    '   2. speak-as-user with a 1-2 sentence verbal summary so voice Claude can speak it to the user.',
+    '',
+    '=== if you genuinely cannot fulfill the task ===',
+    '',
+    'Even then, you MUST still report back via speak-as-user so voice Claude can tell the user.',
+    'The user is waiting for an answer. Phrase it like:',
+    '    "Actually, the helper checked and that\'s not something it can do either."',
+    '    "Helper here — turns out I don\'t have access to that on this machine. Try [alternative]."',
+    'Keep it under 25 words. Do NOT just silently abort — the user would hear nothing back.',
+    '',
+    '=== examples of things you SHOULD pick up ===',
+    '* "what\'s lm-assist doing right now" → curl lm-assist /sessions and /agent/execution',
+    '* "any running Claude Code sessions" → curl lm-assist',
+    '* "what did I work on yesterday" → list recent Claude Code session summaries',
+    '* "check my trade engine status" → curl localhost ports, read project state',
+    '* "what\'s in my CLAUDE.md" → Bash, cat the file',
+    '* "is the deploy running" → ps / netstat / curl local service',
+    '',
+    '=== examples to SKIP ===',
+    '* email / calendar (claude.ai handles those via connectors; user can click "Use Gmail" themselves)',
+    '* general knowledge questions (cloud Claude already answered or refused appropriately)',
+    '* code Claude already answered correctly',
+    '',
+    'Output a one-line summary of what you did at the end. If you abort, say so.',
   ].join('\n');
 
   log(`spawning bridge agent (model=${config.bridgeAgentModel})…`);

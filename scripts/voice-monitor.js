@@ -256,9 +256,9 @@ async function fireBridgeAgent(userText, refusalText) {
   const prompt = [
     'You are the capability-bridge agent for an lm-voice conversation.',
     '',
-    'The user is in a CLAUDE.AI VOICE session (Haiku model, restricted toolset — no MCP, no Gmail, no Drive).',
-    'Voice mode just refused to fulfill a request. Decide whether TEXT MODE (Opus, full MCP tools)',
-    'can fulfill it and, if so, route the answer back into the voice conversation.',
+    'A user is in a CLAUDE.AI VOICE session (Haiku, restricted toolset — no MCP, no Gmail, no Drive).',
+    'Voice mode just refused to fulfill a request. Your job: see if TEXT MODE (Opus, full MCP) can do it,',
+    'and route the answer back into voice so the user hears it.',
     '',
     '=== last user transcript ===',
     userText || '(none captured)',
@@ -266,31 +266,50 @@ async function fireBridgeAgent(userText, refusalText) {
     '=== voice-mode assistant reply (the refusal) ===',
     refusalText,
     '',
-    '=== available tools (curl these from Bash) ===',
+    '=== tools (curl from Bash) ===',
     '',
     '* POST http://127.0.0.1:3199/api/claude-ai/voice/inject-text { "text": "..." }',
-    '  Inserts a text turn into the SAME conversation (uses Opus + full MCP).',
-    '  Returns { "ok": true, "text": "<assistant reply>" } with the text-mode answer.',
+    '  Returns { "ok": true, "text": "<assistant reply>" } — text-mode Claude\'s response to your prompt.',
     '',
     '* POST http://127.0.0.1:3199/api/claude-ai/voice/speak-as-user { "text": "..." }',
-    '  Synthesizes text and feeds it into the voice WS as if the user spoke it.',
-    '  The user then HEARS Claude voice mode\'s response.',
+    '  Synthesizes text → injects as user speech in the voice WS.',
+    '  Voice Claude then responds in voice; the user hears it.',
+    '',
+    '=== IMPORTANT: claude.ai MCP connector quirk ===',
+    'Even in text mode, MCP connectors (Gmail, Drive, Calendar, etc.) are NOT loaded by default in a',
+    'fresh conversation. Claude must first invoke `tool_search` to load them. So a single prompt like',
+    '"What is my latest email?" usually fails — Claude says it doesn\'t have Gmail tools.',
+    '',
+    'The reliable two-shot pattern:',
+    '  inject-text #1: prompt that explicitly says "Use the Gmail tools (call tool_search first if',
+    '                  needed) to find and read my most recent email. Return a short summary."',
+    '  → text-mode reply usually contains the answer in <300 chars',
+    '  → if it STILL says no tools, try one more inject with explicit "Use tool_search to load Gmail',
+    '    tools, then call Gmail:search_threads on in:inbox limit 1."',
     '',
     '=== procedure ===',
-    '1. Decide: can text mode plausibly answer the user\'s request? (e.g. Gmail/Drive/web search).',
-    '   If NO, do nothing and exit.',
-    '2. If YES, call inject-text with a query that asks text-mode Claude to actually do the task.',
-    '   Use phrasing like: "Please use the available tools to answer this for me: <user request>"',
-    '3. Read the response text. Extract just the user-facing answer (concise, conversational).',
-    '4. Call speak-as-user with that answer, phrased naturally as if you (the user) are saying it,',
-    '   e.g. "Got it, my latest email is from npm about token expiry — should I rotate the token?"',
-    '   This makes voice-mode Claude respond in voice with the context already in hand.',
+    '1. Decide whether the request is something text-mode-with-MCP could fulfill.',
+    '   (Email, calendar, docs, web search → YES. Stock quote, math → no.)',
+    '   If NO, output one line "skip: <reason>" and stop.',
     '',
-    'Keep your work tight. Do not chain multiple tools — one inject + one speak should be enough.',
-    'If anything errors, abort silently. Output a one-line summary of what you did at the end.',
+    '2. Call inject-text with a prompt that EXPLICITLY tells Claude to use the right tool',
+    '   and call tool_search first if needed (see pattern above).',
+    '',
+    '3. Read the .text field of the response. If it\'s a refusal too, try once more with',
+    '   stronger phrasing about tool_search. Otherwise extract a SHORT user-facing answer.',
+    '',
+    '4. Call speak-as-user with the answer phrased as if YOU (the user) are saying it,',
+    '   so voice-Claude responds naturally. Example:',
+    '   - Bad : "Your latest email is from npm about token expiry."',
+    '   - Good: "Actually I just checked — my latest email is from npm saying my token expired.',
+    '           Should I rotate it?"',
+    '',
+    'Keep the speak-as-user text under 25 words — Supertonic + Deepgram round-trip loses fidelity',
+    'on long text. Output a one-line summary of what you did at the end. If anything errors, abort.',
   ].join('\n');
 
   log(`spawning bridge agent (model=${config.bridgeAgentModel})…`);
+  const t0 = Date.now();
   const r = await httpReq('POST', `${config.lmAssistUrl}/agent/execute`, {
     prompt,
     cwd: config.bridgeAgentCwd,
@@ -300,8 +319,13 @@ async function fireBridgeAgent(userText, refusalText) {
     settingSources: ['user'],
     outputConfig: { effort: 'medium' },
   });
-  const result = (r.json?.result || r.json?.text || '').slice(0, 400);
-  log(`agent done: ${result.replace(/\s+/g, ' ').slice(0, 300)}`);
+  // lm-assist wraps the agent payload: { success, data: { success, result, sessionId, durationMs, numTurns, ... } }
+  const inner = r.json?.data ?? r.json ?? {};
+  const result = (inner.result || inner.text || r.text || '').toString();
+  const dt = Math.round((Date.now() - t0) / 1000);
+  log(`agent done in ${dt}s · turns=${inner.numTurns ?? '?'} · cost=$${inner.totalCostUsd ?? '?'}`);
+  log(`  session: ${inner.sessionId || '?'}`);
+  log(`  result : ${result.replace(/\s+/g, ' ').slice(0, 400)}`);
 }
 
 async function main() {

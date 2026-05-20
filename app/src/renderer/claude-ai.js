@@ -622,9 +622,10 @@ async function injectComposerText() {
   if (!text) return;
   els.composerInput.disabled = true;
   els.composerSend.disabled = true;
-  // Optimistically show the user's text in the log so they get immediate
-  // feedback. The voice-WS history record (if relayed) will arrive later.
-  addRow('user', text);
+  // Render typed messages with a distinct class so they stand out from voice
+  // bubbles. The voice WS doesn't relay HTTP-injected turns, so the only
+  // record of this exchange in the UI is what we append here.
+  addRow('user typed', text);
   els.composerInput.value = '';
   try {
     const r = await api('/api/claude-ai/voice/inject-text', {
@@ -632,7 +633,7 @@ async function injectComposerText() {
       body: { text },
     });
     if (!r?.ok) addRow('error', `Inject failed: ${r?.error || r?.body || JSON.stringify(r)}`);
-    else if (r?.text) addRow('assistant', r.text);
+    else if (r?.text) addRow('assistant typed', r.text.trim());
   } catch (e) {
     addRow('error', `Inject failed: ${e.message}`);
   } finally {

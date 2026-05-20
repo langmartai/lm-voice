@@ -906,6 +906,42 @@ async function createConversationViaBrowser({ name = 'LM Voice session', model =
   return claudeAiBrowserExecuteJs(code);
 }
 
+// Hotkey-triggered: bring the embedded claude.ai browser forward, switch to
+// the Conversation tab, and start a new voice session if one isn't already
+// open. The bridge needs the page snippet to be attached before it can drive
+// the upstream; we wait for that briefly when the browser was just opened.
+async function launchClaudeAiConversation() {
+  const justOpened = !claudeAiBrowser || claudeAiBrowser.isDestroyed();
+  openClaudeAiBrowser(null, 'conversation');
+  try { claudeAiBrowser?.show(); claudeAiBrowser?.focus(); } catch {}
+
+  // Wait for the page snippet to attach to the local bridge — it needs to
+  // be ready before sendToPageText can open the upstream. Skip the wait if
+  // the page is already attached.
+  if (claudeAiBridge && !claudeAiBridge.status().pageAttached) {
+    const deadline = Date.now() + (justOpened ? 8000 : 3000);
+    while (Date.now() < deadline) {
+      if (claudeAiBridge.status().pageAttached) break;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+  }
+  if (!claudeAiBridge?.status().pageAttached) {
+    return { ok: false, error: 'page not attached after wait — log in to claude.ai inside the embedded browser first' };
+  }
+  // If an upstream is already open, leave it alone (don't disrupt a live
+  // turn). Bringing the window forward is enough.
+  if (claudeAiBridge.status().upstreamOpen) {
+    return { ok: true, alreadyOpen: true };
+  }
+  // Otherwise create a fresh conversation and open the voice WS on it.
+  const c = await createConversationViaBrowser({ name: 'LM Voice session', model: 'claude-opus-4-7' });
+  if (!c?.ok) return { ok: false, step: 'create-conversation', error: c?.error || c };
+  const openMsg = { _bridge: 'open', convId: c.uuid, voice: 'airy', language: 'en-US', autoStartMic: true };
+  const sent = claudeAiBridge.sendToPageText(JSON.stringify(openMsg));
+  if (!sent) return { ok: false, step: 'open-upstream', error: 'send to page failed', convId: c.uuid };
+  return { ok: true, convId: c.uuid };
+}
+
 async function deleteConversationViaBrowser({ convId } = {}) {
   if (!convId) return { ok: false, error: 'convId is required' };
   const safeUuid = String(convId).replace(/[^a-f0-9-]/gi, '');
@@ -2848,8 +2884,15 @@ async function init() {
   });
 
   hotkey = new Hotkey({ key: config.hotkey.pushToTalk, mode: config.hotkey.mode });
-  hotkey.on('press', onHotkeyPress);
-  hotkey.on('release', onHotkeyRelease);
+  // The hotkey now launches the claude.ai conversation flow (embedded browser
+  // + Conversation tab + new voice session). Release is a no-op — the new
+  // flow keeps the mic on continuously rather than push-to-talk.
+  hotkey.on('press', () => {
+    launchClaudeAiConversation().then((r) => {
+      if (!r?.ok) logError('hotkey launch', new Error(r?.error || JSON.stringify(r)));
+    }).catch((err) => logError('hotkey launch', err));
+  });
+  hotkey.on('release', () => { /* no-op under the claude.ai flow */ });
   try {
     await hotkey.start();
   } catch (err) {
